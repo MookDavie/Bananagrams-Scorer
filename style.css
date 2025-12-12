@@ -5,21 +5,21 @@ body {
     text-align: center;
     margin: 0;
     padding: 0;
-    /* Prevent scrolling and bouncing on mobile */
-    height: 100vh;
-    width: 100vw;
-    overflow: hidden;
-    position: fixed;
+    /* Removed: height: 100vh; width: 100vw; overflow: hidden; position: fixed; */
+    /* Let body be normal, but ensure its children fill the screen */
+    min-height: 100vh; /* Ensure body is at least viewport height */
+    position: relative; /* For absolutely positioned children if needed, though fixed is used below */
 }
 
 /* Main container for the camera view */
 #camera-container {
-    position: absolute;
+    position: fixed; /* Fixed to the viewport */
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
+    width: 100vw; /* Use vw/vh for fixed elements to fill the screen */
+    height: 100vh;
+    overflow: hidden; /* Hide video overflow within its container */
+    z-index: -1; /* Send it to the background */
 }
 
 #video {
@@ -36,7 +36,7 @@ body {
 
 /* The overlay with the guide box */
 #scan-overlay {
-    position: absolute;
+    position: absolute; /* Absolute relative to camera-container */
     top: 0;
     left: 0;
     width: 100%;
@@ -62,7 +62,7 @@ body {
 }
 
 #overlay-text {
-    position: absolute;
+    position: absolute; /* Absolute relative to camera-container */
     top: 25vh;
     width: 100%;
     color: white;
@@ -72,13 +72,14 @@ body {
 
 /* Controls at the bottom */
 #controls {
-    position: absolute;
+    position: fixed; /* Fixed to the viewport, on top of camera */
     bottom: 0;
     left: 0;
-    width: 100%;
+    width: 100vw;
     padding: 20px;
     box-sizing: border-box;
     background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+    z-index: 10; /* Ensure controls are above camera */
 }
 
 #scanButton {
@@ -103,25 +104,26 @@ body {
 
 /* Results Panel (initially hidden) */
 #results-panel {
-    position: absolute;
+    position: fixed; /* Fixed to the viewport */
     bottom: 0;
     left: 0;
-    width: 100%;
-    height: 80vh;
+    width: 100vw;
+    height: 80vh; /* Panel takes up 80% of viewport height */
     background-color: #fff;
     color: #333;
     border-top-left-radius: 20px;
     border-top-right-radius: 20px;
-    transform: translateY(100%);
+    transform: translateY(100%); /* Start off-screen */
     transition: transform 0.3s ease-in-out;
     padding: 20px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    z-index: 20; /* Ensure results panel is above controls */
 }
 
 #results-panel.visible {
-    transform: translateY(0);
+    transform: translateY(0); /* Slide into view */
 }
 
 #results-header {
@@ -141,9 +143,10 @@ body {
 }
 
 #output {
-    flex-grow: 1;
-    overflow-y: auto;
+    flex-grow: 1; /* Allows this div to take up all available vertical space */
+    overflow-y: auto; /* This is crucial: enables vertical scrolling for its content */
     margin-top: 10px;
+    padding-right: 5px; /* Small padding for scrollbar visibility */
 }
 
 .word-item {
