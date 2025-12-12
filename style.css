@@ -9,6 +9,7 @@ body {
     position: relative;
 }
 
+/* --- THIS IS THE CORRECTED PART --- */
 #camera-container {
     position: fixed;
     top: 0;
@@ -17,20 +18,26 @@ body {
     height: 100vh;
     overflow: hidden;
     z-index: -1;
+    /* Use Flexbox to center the child video element */
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
-/* --- THIS IS THE CORRECTED PART --- */
 #video {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    min-width: 100%;
-    min-height: 100%;
+    /* Remove absolute positioning and top/left */
+    /* position: absolute; */
+    /* top: 50%; */
+    /* left: 50%; */
+
+    /* Ensure the video is larger than the screen in both dimensions */
+    min-width: 100vh; /* Use vh for width when rotated */
+    min-height: 100vw; /* Use vw for height when rotated */
     width: auto;
     height: auto;
-    object-fit: cover;
-    /* The transform property will be set by JavaScript to handle centering and rotation */
-    /* Example: transform: translate(-50%, -50%) rotate(90deg); */
+    
+    /* The transform for rotation will be set by JavaScript */
+    /* Example: transform: rotate(90deg); */
 }
 /* --- END OF CORRECTION --- */
 
