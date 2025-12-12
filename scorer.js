@@ -24,43 +24,30 @@ function yieldToMainThread() {
 
 // --- Initialization ---
 async function initialize() {
-    await setupCamera();
-    await loadDictionary();
-    tesseractScheduler = Tesseract.createScheduler();
-    const worker = await Tesseract.createWorker('eng', 1, {
-        logger: m => {
-            // Update the button text with OCR progress
-            if (m.status === 'recognizing text') {
-                scanButton.textContent = `Reading... ${Math.round(m.progress * 100)}%`;
+    try {
+        await setupCamera();
+        await loadDictionary();
+        tesseractScheduler = Tesseract.createScheduler();
+        const worker = await Tesseract.createWorker('eng', 1, {
+            logger: m => {
+                if (m.status === 'recognizing text') {
+                    scanButton.textContent = `Reading... ${Math.round(m.progress * 100)}%`;
+                }
             }
-        }
-    });
-    tesseractScheduler.addWorker(worker);
-    scanButton.textContent = 'Scan Grid';
-    scanButton.disabled = false;
+        });
+        tesseractScheduler.addWorker(worker);
+    } catch (error) {
+        console.error("Initialization failed:", error);
+        scanButton.textContent = 'Error!';
+        alert("Initialization failed. Please refresh the page. Check the console for details.");
+    } finally {
+        scanButton.textContent = 'Scan Grid';
+        scanButton.disabled = false;
+    }
 }
 
 async function loadDictionary() { /* ... same as before ... */ }
-
-async function setupCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        video.srcObject = stream;
-        await new Promise(resolve => {
-            video.onloadedmetadata = () => {
-                video.play();
-                const isStreamLandscape = video.videoWidth > video.videoHeight;
-                video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
-                debugCanvas.width = video.clientWidth;
-                debugCanvas.height = video.clientHeight;
-                resolve();
-            };
-        });
-    } catch (err) {
-        console.error("Error accessing camera: ", err);
-        alert('Could not access camera.');
-    }
-}
+async function setupCamera() { /* ... same as before ... */ }
 
 // --- UI Interaction ---
 closeButton.addEventListener('click', () => {
@@ -71,42 +58,47 @@ closeButton.addEventListener('click', () => {
 
 // --- Core Logic ---
 async function handleScan() {
+    // Disable the button immediately. The 'finally' block will re-enable it.
     scanButton.disabled = true;
     scanButton.textContent = 'Capturing...';
-    
-    const debugCtx = debugCanvas.getContext('2d');
-    debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    try {
+        const debugCtx = debugCanvas.getContext('2d');
+        debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
 
-    // Yield to allow the UI to update before the heavy OCR starts.
-    await yieldToMainThread();
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Tesseract runs in a worker, so this part is non-blocking.
-    const { data } = await tesseractScheduler.addJob('recognize', canvas);
+        await yieldToMainThread();
 
-    // --- Start of the potentially blocking section ---
-    scanButton.textContent = 'Processing...';
-    await yieldToMainThread(); // Yield again before heavy CPU work!
+        const { data } = await tesseractScheduler.addJob('recognize', canvas);
 
-    drawDebugBoxes(data.symbols);
-    await yieldToMainThread(); // Yield after drawing
+        scanButton.textContent = 'Processing...';
+        await yieldToMainThread();
 
-    const { grid, letterMap } = reconstructGrid(data.symbols);
-    await yieldToMainThread(); // Yield after grid reconstruction
+        drawDebugBoxes(data.symbols);
+        await yieldToMainThread();
 
-    const words = extractWordsFromGrid(grid);
-    await yieldToMainThread(); // Yield after word extraction
+        const { grid, letterMap } = reconstructGrid(data.symbols);
+        await yieldToMainThread();
 
-    highlightFinalWords(words, letterMap);
-    
-    processWords(words);
-    // --- End of the potentially blocking section ---
+        const words = extractWordsFromGrid(grid);
+        await yieldToMainThread();
 
-    scanButton.disabled = false;
-    scanButton.textContent = 'Scan Grid';
+        highlightFinalWords(words, letterMap);
+        
+        processWords(words);
+
+    } catch (error) {
+        // If anything goes wrong, log it and inform the user.
+        console.error("An error occurred during the scan:", error);
+        alert("An error occurred during the scan. Please try again. Check the console for more details.");
+    } finally {
+        // This block is GUARANTEED to run, ensuring the button is always re-enabled.
+        scanButton.disabled = false;
+        scanButton.textContent = 'Scan Grid';
+    }
 }
 
 function drawDebugBoxes(symbols) { /* ... same as before ... */ }
@@ -117,5 +109,5 @@ function processWords(words) { /* ... same as before ... */ }
 
 // --- Start the App ---
 scanButton.disabled = true;
-scanButton.textContent = '...';
+scanButton.textContent = 'Initializing...'; // New initial state
 initialize();
