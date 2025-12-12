@@ -1,156 +1,206 @@
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background-color: #333; /* Darker background for better contrast */
-    color: #fff;
-    text-align: center;
-    margin: 0;
-    padding: 0;
-    min-height: 100vh; /* Ensure body is at least viewport height */
-    position: relative;
+// --- DOM Elements ---
+const video = document.getElementById('video');
+const scanButton = document.getElementById('scanButton');
+const canvas = document.getElementById('canvas');
+const resultsPanel = document.getElementById('results-panel');
+const closeButton = document.getElementById('close-results');
+const outputEl = document.getElementById('output');
+const totalScoreEl = document.getElementById('total-score');
+const overlay = document.getElementById('scan-overlay');
+
+// --- State and Constants ---
+const letterScores = {
+    'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1,
+    'J': 8, 'K': 5, 'L': 1, 'M': 3, 'N': 1, 'O': 1, 'P': 3, 'Q': 10, 'R': 1,
+    'S': 1, 'T': 1, 'U': 1, 'V': 4, 'W': 4, 'X': 8, 'Y': 4, 'Z': 10
+};
+let dictionary = new Set();
+let scannedWords = new Set(); // Use a Set to avoid duplicate words
+let totalScore = 0;
+let tesseractScheduler;
+
+// --- Initialization ---
+async function initialize() {
+    await setupCamera();
+    await loadDictionary();
+    tesseractScheduler = Tesseract.createScheduler();
+    const worker = await Tesseract.createWorker('eng');
+    tesseractScheduler.addWorker(worker);
+    scanButton.textContent = 'Scan';
+    scanButton.disabled = false;
 }
 
-/* Main container for the camera view */
-#camera-container {
-    position: fixed; /* Fixed to the viewport */
-    top: 0;
-    left: 0;
-    width: 100vw; /* Use vw/vh for fixed elements to fill the screen */
-    height: 100vh;
-    overflow: hidden; /* Hide video overflow within its container */
-    z-index: -1; /* Send it to the background */
+async function loadDictionary() {
+    try {
+        const response = await fetch('dictionary.txt');
+        const text = await response.text();
+        dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
+    } catch (error) {
+        console.error('Dictionary load error:', error);
+        alert('Could not load dictionary. Please check the connection and refresh.');
+    }
 }
 
-#video {
-    width: 100%; /* Fill container width */
-    height: 100%; /* Fill container height */
-    object-fit: cover; /* Maintain aspect ratio, cover container, crop if needed */
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    /* transform will be set by JavaScript to handle centering and rotation */
-    /* transform: translate(-50%, -50%) [rotate(90deg)]; */
+async function setupCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' }
+        });
+        video.srcObject = stream;
+        
+        await new Promise(resolve => {
+            video.onloadedmetadata = () => {
+                video.play(); // Start playing the video
+
+                // Check if the video stream is wider than it is tall (landscape)
+                // This is common for rear cameras even when the phone is held in portrait.
+                const isStreamLandscape = video.videoWidth > video.videoHeight;
+                
+                // Apply rotation and centering transform if the stream is landscape
+                // and we assume the device is held in portrait.
+                if (isStreamLandscape) {
+                    // Rotate 90 degrees and center. The order of transforms matters.
+                    // translate(-50%, -50%) centers the element, then rotate it.
+                    video.style.transform = 'translate(-50%, -50%) rotate(90deg)';
+                } else {
+                    // If stream is already portrait or square, just center it
+                    video.style.transform = 'translate(-50%, -50%)';
+                }
+                resolve();
+            };
+        });
+    } catch (err) {
+        console.error("Error accessing camera: ", err);
+        alert('Could not access camera. Please grant permission and refresh.');
+    }
 }
 
-/* The overlay with the guide box */
-#scan-overlay {
-    position: absolute; /* Absolute relative to camera-container */
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    /* This creates the "hole" effect */
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
-    /* Define the guide box dimensions and position */
-    --guide-width: 80vw;
-    --guide-height: 15vh;
-    --guide-top: 35vh;
-    clip-path: polygon(
-        0% 0%, 0% 100%, 100% 100%, 100% 0%, 0% 0%,
-        /* The "hole" coordinates */
-        calc(50% - var(--guide-width) / 2) var(--guide-top),
-        calc(50% + var(--guide-width) / 2) var(--guide-top),
-        calc(50% + var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
-        calc(50% - var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
-        calc(50% - var(--guide-width) / 2) var(--guide-top)
-    );
-    border: 2px solid #ffc107; /* Banana Yellow border */
-    border-radius: 12px;
-    box-sizing: border-box;
+// --- UI Interaction ---
+scanButton.addEventListener('click', handleScan);
+closeButton.addEventListener('click', () => resultsPanel.classList.remove('visible'));
+
+// --- Core Logic ---
+async function handleScan() {
+    scanButton.disabled = true;
+    scanButton.textContent = '...';
+
+    // Get the guide box's position relative to the viewport
+    const guideRect = overlay.getBoundingClientRect();
+    
+    // Calculate the crop area based on the video's actual dimensions
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const viewWidth = window.innerWidth;
+    const viewHeight = window.innerHeight;
+
+    // Determine the effective scale factor, considering potential video rotation
+    let effectiveVideoWidth = videoWidth;
+    let effectiveVideoHeight = videoHeight;
+    if (video.style.transform.includes('rotate(90deg)')) {
+        // If rotated, swap width and height for calculation purposes
+        effectiveVideoWidth = videoHeight;
+        effectiveVideoHeight = videoWidth;
+    }
+
+    // Calculate the scale factor between the *effective* video dimensions and the viewport
+    // This is more complex because object-fit: cover might crop.
+    // A simpler approach is to draw the full video to a temporary canvas, then crop from there.
+    // Let's stick to the direct crop from video for now, but be aware of potential edge cases.
+
+    // For cropping, we need to consider the video's current display size and position
+    // relative to the viewport, and then map that back to the intrinsic video pixels.
+    // This is a common source of error. Let's refine the cropping logic.
+
+    // Create a temporary canvas to draw the *visible* portion of the video
+    // This handles object-fit: cover and rotation more reliably for cropping.
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+
+    // Calculate the aspect ratios
+    const videoAspectRatio = videoWidth / videoHeight;
+    const containerAspectRatio = viewWidth / viewHeight;
+
+    let sx, sy, sWidth, sHeight; // Source rectangle on the video
+    let dx, dy, dWidth, dHeight; // Destination rectangle on the tempCanvas
+
+    tempCanvas.width = viewWidth;
+    tempCanvas.height = viewHeight;
+
+    // Calculate how the video is actually rendered by object-fit: cover
+    if (videoAspectRatio > containerAspectRatio) { // Video is wider than container
+        sHeight = videoHeight;
+        sWidth = videoHeight * containerAspectRatio;
+        sx = (videoWidth - sWidth) / 2;
+        sy = 0;
+    } else { // Video is taller than container
+        sWidth = videoWidth;
+        sHeight = videoWidth / containerAspectRatio;
+        sx = 0;
+        sy = (videoHeight - sHeight) / 2;
+    }
+
+    // Draw the visible portion of the video to the temporary canvas
+    tempCtx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, tempCanvas.width, tempCanvas.height);
+
+    // Now, crop from this temporary canvas using the guideRect
+    canvas.width = guideRect.width;
+    canvas.height = guideRect.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(tempCanvas, guideRect.left, guideRect.top, guideRect.width, guideRect.height, 0, 0, canvas.width, canvas.height);
+
+
+    // Perform OCR on the cropped canvas
+    const { data: { text } } = await tesseractScheduler.addJob('recognize', canvas, {
+        // Tell Tesseract to treat the image as a single line of text. This is crucial!
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+    });
+
+    processRecognizedText(text);
+
+    scanButton.disabled = false;
+    scanButton.textContent = 'Scan';
 }
 
-#overlay-text {
-    position: absolute; /* Absolute relative to camera-container */
-    top: 25vh;
-    width: 100%;
-    color: white;
-    font-size: 1.2em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+function processRecognizedText(text) {
+    // Clean up the recognized text: uppercase, remove non-alphabetic chars, take the first "word"
+    const word = text.trim().toUpperCase().replace(/[^A-Z]/g, '');
+
+    if (word.length < 2 || scannedWords.has(word)) {
+        // Ignore short words, empty strings, or duplicates
+        return;
+    }
+
+    scannedWords.add(word);
+    const isValid = dictionary.has(word.toLowerCase());
+    
+    const wordDiv = document.createElement('div');
+    wordDiv.classList.add('word-item');
+
+    if (isValid) {
+        const score = Array.from(word).reduce((acc, char) => acc + (letterScores[char] || 0), 0);
+        totalScore += score;
+        wordDiv.classList.add('valid');
+        wordDiv.textContent = `${word} - Score: ${score}`;
+    } else {
+        wordDiv.classList.add('invalid');
+        wordDiv.textContent = `${word} - (Invalid)`;
+    }
+
+    // Add the new word to the top of the list
+    outputEl.prepend(wordDiv);
+    updateTotalScore();
+    
+    // Show the results panel if it's not already visible
+    if (!resultsPanel.classList.contains('visible')) {
+        resultsPanel.classList.add('visible');
+    }
 }
 
-/* Controls at the bottom */
-#controls {
-    position: fixed; /* Fixed to the viewport, on top of camera */
-    bottom: 0;
-    left: 0;
-    width: 100vw;
-    padding: 20px;
-    box-sizing: border-box;
-    background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
-    z-index: 10; /* Ensure controls are above camera */
+function updateTotalScore() {
+    totalScoreEl.textContent = `Total Score: ${totalScore}`;
 }
 
-#scanButton {
-    display: block;
-    width: 80px;
-    height: 80px;
-    margin: 0 auto;
-    font-size: 1em;
-    font-weight: bold;
-    color: #333;
-    background-color: #ffc107;
-    border: 4px solid white;
-    border-radius: 50%; /* Make it a circle */
-    cursor: pointer;
-    transition: background-color 0.2s;
-    -webkit-tap-highlight-color: transparent;
-}
-
-#scanButton:active {
-    background-color: #e0a800;
-}
-
-/* Results Panel (initially hidden) */
-#results-panel {
-    position: fixed; /* Fixed to the viewport */
-    bottom: 0;
-    left: 0;
-    width: 100vw;
-    height: 80vh; /* Panel takes up 80% of viewport height */
-    background-color: #fff;
-    color: #333;
-    border-top-left-radius: 20px;
-    border-top-right-radius: 20px;
-    transform: translateY(100%); /* Start off-screen */
-    transition: transform 0.3s ease-in-out;
-    padding: 20px;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    z-index: 20; /* Ensure results panel is above controls */
-}
-
-#results-panel.visible {
-    transform: translateY(0); /* Slide into view */
-}
-
-#results-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #eee;
-    padding-bottom: 10px;
-}
-
-#close-results {
-    padding: 8px 12px;
-    background: #eee;
-    border: none;
-    border-radius: 8px;
-    font-weight: bold;
-}
-
-#output {
-    flex-grow: 1; /* Allows this div to take up all available vertical space */
-    overflow-y: auto; /* This is crucial: enables vertical scrolling for its content */
-    margin-top: 10px;
-    padding-right: 5px; /* Small padding for scrollbar visibility */
-}
-
-.word-item {
-    padding: 10px;
-    margin-bottom: 8px;
-    border-radius: 5px;
-    font-weight: 500;
-}
-.valid { background-color: #d4edda; border-left: 5px solid #28a745; }
-.invalid { background-color: #f8d7da; border-left: 5px solid #dc3545; text-decoration: line-through; }
+// --- Start the App ---
+scanButton.disabled = true;
+scanButton.textContent = '...';
+initialize();
