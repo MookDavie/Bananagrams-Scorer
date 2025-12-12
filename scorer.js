@@ -22,35 +22,19 @@ function yieldToMainThread() {
     return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-// --- Initialization ---
+// --- Initialization Flow ---
 async function initialize() {
-    // We will handle errors in the specific functions that can fail.
     const cameraReady = await setupCamera();
-    if (!cameraReady) return; // Stop initialization if camera failed
+    if (!cameraReady) return;
 
     const dictionaryReady = await loadDictionary();
-    if (!dictionaryReady) return; // Stop if dictionary failed
+    if (!dictionaryReady) return;
 
     const ocrReady = await setupTesseract();
-    if (!ocrReady) return; // Stop if OCR setup failed
+    if (!ocrReady) return;
 
-    // If all steps succeeded, enable the button.
     scanButton.textContent = 'Scan Grid';
     scanButton.disabled = false;
-}
-
-async function loadDictionary() {
-    try {
-        const response = await fetch('dictionary.txt');
-        const text = await response.text();
-        dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
-        return true; // Success
-    } catch (error) {
-        console.error('Dictionary load error:', error);
-        scanButton.textContent = 'Error!';
-        alert('Could not load the dictionary file. Please check your connection and refresh.');
-        return false; // Failure
-    }
 }
 
 async function setupCamera() {
@@ -58,7 +42,6 @@ async function setupCamera() {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         video.srcObject = stream;
         
-        // This promise resolves when the video is ready to play.
         await new Promise((resolve, reject) => {
             video.onloadedmetadata = () => {
                 video.play();
@@ -66,19 +49,38 @@ async function setupCamera() {
                 video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
                 debugCanvas.width = video.clientWidth;
                 debugCanvas.height = video.clientHeight;
-                resolve(); // Signal success
+                resolve();
             };
-            // Add an error handler for the video element itself
-            video.onerror = () => {
-                reject(new Error("Video element failed to load stream."));
-            };
+            video.onerror = () => reject(new Error("Video element failed to load stream."));
         });
-        return true; // Success
+        return true;
     } catch (err) {
         console.error("Error accessing camera: ", err);
-        scanButton.textContent = 'No Camera';
-        alert('Could not access the camera. Please grant permission and refresh the page.');
-        return false; // Failure
+        if (err.name === "NotAllowedError") {
+            scanButton.textContent = 'Camera Blocked';
+            alert('Camera access was blocked. You need to go into your browser settings for this site and manually allow camera permission.');
+        } else if (err.name === "NotFoundError") {
+            scanButton.textContent = 'No Camera';
+            alert('No camera was found on this device.');
+        } else {
+            scanButton.textContent = 'No Camera';
+            alert('Could not access the camera. Please ensure you are on a secure (https) connection and grant permission.');
+        }
+        return false;
+    }
+}
+
+async function loadDictionary() {
+    try {
+        const response = await fetch('dictionary.txt');
+        const text = await response.text();
+        dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
+        return true;
+    } catch (error) {
+        console.error('Dictionary load error:', error);
+        scanButton.textContent = 'Error!';
+        alert('Could not load the dictionary file. Please check your connection and refresh.');
+        return false;
     }
 }
 
@@ -93,12 +95,12 @@ async function setupTesseract() {
             }
         });
         tesseractScheduler.addWorker(worker);
-        return true; // Success
+        return true;
     } catch (error) {
         console.error("Could not set up Tesseract:", error);
         scanButton.textContent = 'Error!';
         alert("Failed to initialize the OCR engine. Please check your internet connection and refresh.");
-        return false; // Failure
+        return false;
     }
 }
 
@@ -146,17 +148,182 @@ async function handleScan() {
         console.error("An error occurred during the scan:", error);
         alert("An error occurred during the scan. Please try again.");
     } finally {
-        // The robust finally block is perfect here, ensuring the button is always re-enabled after a scan attempt.
         scanButton.disabled = false;
         scanButton.textContent = 'Scan Grid';
     }
 }
 
-function drawDebugBoxes(symbols) { /* ... same as before ... */ }
-function highlightFinalWords(words, letterMap) { /* ... same as before ... */ }
-function reconstructGrid(symbols) { /* ... same as before ... */ }
-function extractWordsFromGrid(grid) { /* ... same as before ... */ }
-function processWords(words) { /* ... same as before ... */ }
+function drawDebugBoxes(symbols) {
+    const debugCtx = debugCanvas.getContext('2d');
+    const scaleX = debugCanvas.width / canvas.width;
+    const scaleY = debugCanvas.height / canvas.height;
+
+    debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+    debugCtx.lineWidth = 2;
+
+    for (const symbol of symbols) {
+        if (!/^[A-Z]$/.test(symbol.text.trim().toUpperCase())) continue;
+        
+        const { x0, y0, x1, y1 } = symbol.bbox;
+        debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
+    }
+}
+
+function highlightFinalWords(words, letterMap) {
+    const debugCtx = debugCanvas.getContext('2d');
+    const scaleX = debugCanvas.width / canvas.width;
+    const scaleY = debugCanvas.height / canvas.height;
+    
+    debugCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
+    debugCtx.lineWidth = 4;
+
+    const lettersInWords = new Set();
+    letterMap.forEach((letter, key) => {
+        for (const word of words) {
+            if (word.includes(letter.text)) { 
+                lettersInWords.add(key);
+            }
+        }
+    });
+
+    lettersInWords.forEach(key => {
+        const letter = letterMap.get(key);
+        if (letter) {
+            const { x0, y0, x1, y1 } = letter.bbox;
+            debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
+        }
+    });
+}
+
+function reconstructGrid(symbols) {
+    if (symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
+
+    const letters = symbols
+        .map(s => ({ text: s.text.trim().toUpperCase(), bbox: s.bbox }))
+        .filter(s => /^[A-Z]$/.test(s.text));
+    
+    if (letters.length === 0) return { grid: new Map(), letterMap: new Map() };
+
+    const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
+    const heights = letters.map(s => s.bbox.y1 - s.bbox.y0).sort((a, b) => a - b);
+    const medianWidth = widths[Math.floor(widths.length / 2)] || 20;
+    const medianHeight = heights[Math.floor(heights.length / 2)] || 20;
+
+    const grid = new Map();
+    const letterMap = new Map();
+    for (const letter of letters) {
+        const gridX = Math.round(letter.bbox.x0 / medianWidth);
+        const gridY = Math.round(letter.bbox.y0 / medianHeight);
+        const key = `${gridX},${gridY}`;
+        grid.set(key, letter.text);
+        letterMap.set(key, letter);
+    }
+    return { grid, letterMap };
+}
+
+function extractWordsFromGrid(grid) {
+    if (grid.size === 0) return new Set();
+
+    const foundWords = new Set();
+    const coords = Array.from(grid.keys()).map(k => k.split(',').map(Number));
+    const xCoords = coords.map(c => c[0]);
+    const yCoords = coords.map(c => c[1]);
+    const minX = Math.min(...xCoords);
+    const maxX = Math.max(...xCoords);
+    const minY = Math.min(...yCoords);
+    const maxY = Math.max(...yCoords);
+
+    const isConnected = (x, y, isHorizontal) => {
+        if (isHorizontal) {
+            return grid.has(`${x},${y - 1}`) || grid.has(`${x},${y + 1}`);
+        } else {
+            return grid.has(`${x - 1},${y}`) || grid.has(`${x + 1},${y}`);
+        }
+    };
+
+    for (let y = minY; y <= maxY; y++) {
+        let currentWord = '';
+        let wordIsConnected = false;
+        for (let x = minX; x <= maxX + 1; x++) {
+            if (grid.has(`${x},${y}`)) {
+                currentWord += grid.get(`${x},${y}`);
+                if (isConnected(x, y, true)) wordIsConnected = true;
+            } else {
+                if (currentWord.length > 1 && wordIsConnected) foundWords.add(currentWord);
+                currentWord = '';
+                wordIsConnected = false;
+            }
+        }
+    }
+
+    for (let x = minX; x <= maxX; x++) {
+        let currentWord = '';
+        let wordIsConnected = false;
+        for (let y = minY; y <= maxY + 1; y++) {
+            if (grid.has(`${x},${y}`)) {
+                currentWord += grid.get(`${x},${y}`);
+                if (isConnected(x, y, false)) wordIsConnected = true;
+            } else {
+                if (currentWord.length > 1 && wordIsConnected) foundWords.add(currentWord);
+                currentWord = '';
+                wordIsConnected = false;
+            }
+        }
+    }
+    
+    if (foundWords.size === 0) {
+        const allWords = new Set();
+        for (let y = minY; y <= maxY; y++) {
+            let currentWord = '';
+            for (let x = minX; x <= maxX + 1; x++) {
+                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
+                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
+            }
+        }
+        for (let x = minX; x <= maxX; x++) {
+            let currentWord = '';
+            for (let y = minY; y <= maxY + 1; y++) {
+                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
+                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
+            }
+        }
+        if (allWords.size >= 1) return allWords;
+    }
+
+    return foundWords;
+}
+
+function processWords(words) {
+    outputEl.innerHTML = '';
+    let totalScore = 0;
+
+    if (words.size === 0) {
+        totalScoreEl.textContent = "No valid words found";
+        resultsPanel.classList.add('visible');
+        return;
+    }
+
+    const validWords = [];
+    words.forEach(word => {
+        if (dictionary.has(word.toLowerCase())) {
+            const score = Array.from(word).reduce((acc, char) => acc + (letterScores[char] || 0), 0);
+            validWords.push({ word, score });
+            totalScore += score;
+        }
+    });
+
+    validWords.sort((a, b) => a.word.localeCompare(b.word));
+
+    validWords.forEach(({ word, score }) => {
+        const wordDiv = document.createElement('div');
+        wordDiv.classList.add('word-item', 'valid');
+        wordDiv.textContent = `${word} - Score: ${score}`;
+        outputEl.append(wordDiv);
+    });
+
+    totalScoreEl.textContent = `Total Score: ${totalScore}`;
+    resultsPanel.classList.add('visible');
+}
 
 // --- Start the App ---
 scanButton.disabled = true;
