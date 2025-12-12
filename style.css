@@ -1,0 +1,156 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: #333; /* Darker background for better contrast */
+    color: #fff;
+    text-align: center;
+    margin: 0;
+    padding: 0;
+    /* Prevent scrolling and bouncing on mobile */
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    position: fixed;
+}
+
+/* Main container for the camera view */
+#camera-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+#video {
+    /* Ensure video covers the entire screen, centered */
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* The overlay with the guide box */
+#scan-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    /* This creates the "hole" effect */
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+    /* Define the guide box dimensions and position */
+    --guide-width: 80vw;
+    --guide-height: 15vh;
+    --guide-top: 35vh;
+    clip-path: polygon(
+        0% 0%, 0% 100%, 100% 100%, 100% 0%, 0% 0%,
+        /* The "hole" coordinates */
+        calc(50% - var(--guide-width) / 2) var(--guide-top),
+        calc(50% + var(--guide-width) / 2) var(--guide-top),
+        calc(50% + var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
+        calc(50% - var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
+        calc(50% - var(--guide-width) / 2) var(--guide-top)
+    );
+    border: 2px solid #ffc107; /* Banana Yellow border */
+    border-radius: 12px;
+    box-sizing: border-box;
+}
+
+#overlay-text {
+    position: absolute;
+    top: 25vh;
+    width: 100%;
+    color: white;
+    font-size: 1.2em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* Controls at the bottom */
+#controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    padding: 20px;
+    box-sizing: border-box;
+    background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+}
+
+#scanButton {
+    display: block;
+    width: 80px;
+    height: 80px;
+    margin: 0 auto;
+    font-size: 1em;
+    font-weight: bold;
+    color: #333;
+    background-color: #ffc107;
+    border: 4px solid white;
+    border-radius: 50%; /* Make it a circle */
+    cursor: pointer;
+    transition: background-color 0.2s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#scanButton:active {
+    background-color: #e0a800;
+}
+
+/* Results Panel (initially hidden) */
+#results-panel {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 80vh;
+    background-color: #fff;
+    color: #333;
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    transform: translateY(100%);
+    transition: transform 0.3s ease-in-out;
+    padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+#results-panel.visible {
+    transform: translateY(0);
+}
+
+#results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+#close-results {
+    padding: 8px 12px;
+    background: #eee;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+#output {
+    flex-grow: 1;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.word-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    font-weight: 500;
+}
+.valid { background-color: #d4edda; border-left: 5px solid #28a745; }
+.invalid { background-color: #f8d7da; border-left: 5px solid #dc3545; text-decoration: line-through; }
