@@ -22,7 +22,7 @@ async function initialize() {
     await loadDictionary();
     tesseractScheduler = Tesseract.createScheduler();
     const worker = await Tesseract.createWorker('eng', 1, {
-        logger: m => console.log(m)
+        logger: m => console.log(m) // Optional: for debugging OCR progress
     });
     tesseractScheduler.addWorker(worker);
     scanButton.textContent = 'Scan Grid';
@@ -65,45 +65,31 @@ closeButton.addEventListener('click', () => resultsPanel.classList.remove('visib
 // --- Core Logic ---
 async function handleScan() {
     scanButton.disabled = true;
-    scanButton.textContent = '...';
+    scanButton.textContent = 'Analyzing...';
 
-    // 1. Capture Image
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // 2. Positional OCR
     const { data } = await tesseractScheduler.addJob('recognize', canvas);
     
-    // 3. Reconstruct Grid
     const grid = reconstructGrid(data.symbols);
-
-    // 4. Extract Words
     const words = extractWordsFromGrid(grid);
-
-    // 5. Validate and Score
     processWords(words);
 
     scanButton.disabled = false;
     scanButton.textContent = 'Scan Grid';
 }
 
-/**
- * Takes a list of Tesseract symbols (char + bbox) and snaps them to a virtual grid.
- * @param {Array} symbols - The array of symbols from Tesseract.
- * @returns {Map<string, string>} A map where the key is "x,y" and value is the character.
- */
 function reconstructGrid(symbols) {
     if (symbols.length === 0) return new Map();
 
-    // Filter for valid uppercase letters and get their bounding boxes
     const letters = symbols
         .map(s => ({ text: s.text.trim().toUpperCase(), bbox: s.bbox }))
         .filter(s => /^[A-Z]$/.test(s.text));
     
     if (letters.length === 0) return new Map();
 
-    // Estimate the median tile size to create a robust grid system
     const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
     const heights = letters.map(s => s.bbox.y1 - s.bbox.y0).sort((a, b) => a - b);
     const medianWidth = widths[Math.floor(widths.length / 2)] || 20;
@@ -111,7 +97,6 @@ function reconstructGrid(symbols) {
 
     const grid = new Map();
     for (const letter of letters) {
-        // Calculate the grid coordinates by "snapping" the tile's position to the grid
         const gridX = Math.round(letter.bbox.x0 / medianWidth);
         const gridY = Math.round(letter.bbox.y0 / medianHeight);
         const key = `${gridX},${gridY}`;
@@ -121,9 +106,9 @@ function reconstructGrid(symbols) {
 }
 
 /**
- * Traverses the virtual grid horizontally and vertically to find word sequences.
- * @param {Map<string, string>} grid - The reconstructed grid from reconstructGrid.
- * @returns {Set<string>} A Set of unique potential words found in the grid.
+ * A much smarter function to extract valid, interconnected words from the grid.
+ * @param {Map<string, string>} grid - The reconstructed grid.
+ * @returns {Set<string>} A Set of unique, validly connected words.
  */
 function extractWordsFromGrid(grid) {
     if (grid.size === 0) return new Set();
@@ -137,37 +122,94 @@ function extractWordsFromGrid(grid) {
     const minY = Math.min(...yCoords);
     const maxY = Math.max(...yCoords);
 
-    // Horizontal scan
+    // --- Helper function to check for cross-connections ---
+    const isConnected = (x, y, isHorizontal) => {
+        if (isHorizontal) {
+            // A horizontal word is connected if any of its letters
+            // has a vertical neighbor.
+            return grid.has(`${x},${y - 1}`) || grid.has(`${x},${y + 1}`);
+        } else {
+            // A vertical word is connected if any of its letters
+            // has a horizontal neighbor.
+            return grid.has(`${x - 1},${y}`) || grid.has(`${x + 1},${y}`);
+        }
+    };
+
+    // --- Horizontal Scan ---
     for (let y = minY; y <= maxY; y++) {
         let currentWord = '';
-        for (let x = minX; x <= maxX + 1; x++) { // Go one past the end to terminate words
+        let startX = -1;
+        let wordIsConnected = false;
+
+        for (let x = minX; x <= maxX + 1; x++) { // Iterate one past the end
             const key = `${x},${y}`;
             if (grid.has(key)) {
+                if (currentWord === '') startX = x; // Mark the start of a new word
                 currentWord += grid.get(key);
+                // Check for a connection for the current letter
+                if (isConnected(x, y, true)) {
+                    wordIsConnected = true;
+                }
             } else {
-                if (currentWord.length > 1) {
+                // End of a potential word
+                if (currentWord.length > 1 && wordIsConnected) {
                     foundWords.add(currentWord);
                 }
+                // Reset for the next word
                 currentWord = '';
+                wordIsConnected = false;
             }
         }
     }
 
-    // Vertical scan
+    // --- Vertical Scan ---
     for (let x = minX; x <= maxX; x++) {
         let currentWord = '';
-        for (let y = minY; y <= maxY + 1; y++) { // Go one past the end to terminate words
+        let startY = -1;
+        let wordIsConnected = false;
+
+        for (let y = minY; y <= maxY + 1; y++) { // Iterate one past the end
             const key = `${x},${y}`;
             if (grid.has(key)) {
+                if (currentWord === '') startY = y;
                 currentWord += grid.get(key);
+                if (isConnected(x, y, false)) {
+                    wordIsConnected = true;
+                }
             } else {
-                if (currentWord.length > 1) {
+                // End of a potential word
+                if (currentWord.length > 1 && wordIsConnected) {
                     foundWords.add(currentWord);
                 }
+                // Reset for the next word
                 currentWord = '';
+                wordIsConnected = false;
             }
         }
     }
+    
+    // Final check: If only one word is found, it's valid by default.
+    // This handles the very first word placed on the board.
+    if (foundWords.size === 0) {
+        const allWords = new Set();
+        // Re-run the extraction without the connection check
+        for (let y = minY; y <= maxY; y++) {
+            let currentWord = '';
+            for (let x = minX; x <= maxX + 1; x++) {
+                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
+                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
+            }
+        }
+        for (let x = minX; x <= maxX; x++) {
+            let currentWord = '';
+            for (let y = minY; y <= maxY + 1; y++) {
+                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
+                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
+            }
+        }
+        if (allWords.size === 1) return allWords;
+    }
+
     return foundWords;
 }
 
@@ -176,22 +218,28 @@ function processWords(words) {
     let totalScore = 0;
 
     if (words.size === 0) {
-        totalScoreEl.textContent = "No words found";
+        totalScoreEl.textContent = "No valid words found";
         resultsPanel.classList.add('visible');
         return;
     }
 
+    const validWords = [];
     words.forEach(word => {
-        const isValid = dictionary.has(word.toLowerCase());
-        if (!isValid) return; // Only show valid words for grid scan
+        if (dictionary.has(word.toLowerCase())) {
+            const score = Array.from(word).reduce((acc, char) => acc + (letterScores[char] || 0), 0);
+            validWords.push({ word, score });
+            totalScore += score;
+        }
+    });
 
-        const score = Array.from(word).reduce((acc, char) => acc + (letterScores[char] || 0), 0);
-        totalScore += score;
-        
+    // Sort words alphabetically for consistent display
+    validWords.sort((a, b) => a.word.localeCompare(b.word));
+
+    validWords.forEach(({ word, score }) => {
         const wordDiv = document.createElement('div');
         wordDiv.classList.add('word-item', 'valid');
         wordDiv.textContent = `${word} - Score: ${score}`;
-        outputEl.prepend(wordDiv);
+        outputEl.append(wordDiv);
     });
 
     totalScoreEl.textContent = `Total Score: ${totalScore}`;
