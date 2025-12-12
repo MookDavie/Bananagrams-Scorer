@@ -15,7 +15,8 @@ let currentState = AppState.INITIALIZING;
 let liveViewIntervalId = null;
 let lastRecognizedWordsData = [];
 
-const CONFIDENCE_THRESHOLD = 60; // **KEY IMPROVEMENT**: Ignore recognitions below this confidence (0-100)
+const CONFIDENCE_THRESHOLD = 65; // Stricter confidence
+const SIZE_DEVIATION_THRESHOLD = 0.5; // Allow 50% deviation from median size
 
 const letterScores = {
     'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1,
@@ -94,73 +95,141 @@ async function runRecognition() {
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
     });
 
-    // Filter symbols by confidence BEFORE processing them
-    const highConfidenceSymbols = ocrData.symbols.filter(s => s.confidence > CONFIDENCE_THRESHOLD);
-
-    const { grid, letterMap } = reconstructGrid(highConfidenceSymbols);
+    const { grid, letterMap, allLetters } = reconstructGrid(ocrData.symbols);
     const wordsData = extractWordsFromGrid(grid);
     
     lastRecognizedWordsData = wordsData;
 
     const debugCtx = debugCanvas.getContext('2d');
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-    drawDebugBoxes(highConfidenceSymbols); // Draw boxes only for high-confidence symbols
+    drawDebugBoxes(allLetters);
     highlightFinalWords(wordsData, letterMap);
 }
 
-// --- Core Logic: Grid Reconstruction and Word Extraction ---
+// --- Core Logic: Coordinate Mapping and Grid Reconstruction ---
 
+/**
+ * **IMPROVEMENT 1: Robust Coordinate Mapping**
+ * Correctly maps a bounding box from the video's intrinsic resolution
+ * to the on-screen debug canvas, accounting for `object-fit: cover`.
+ */
+function mapBoxToCanvas(box) {
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const canvasWidth = debugCanvas.clientWidth;
+    const canvasHeight = debugCanvas.clientHeight;
+
+    const videoAspect = videoWidth / videoHeight;
+    const canvasAspect = canvasWidth / canvasHeight;
+
+    let scale = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (videoAspect > canvasAspect) { // Video is wider than canvas, letterboxed top/bottom
+        scale = canvasWidth / videoWidth;
+        offsetY = (canvasHeight - videoHeight * scale) / 2;
+    } else { // Video is taller than canvas, letterboxed left/right
+        scale = canvasHeight / videoHeight;
+        offsetX = (canvasWidth - videoWidth * scale) / 2;
+    }
+
+    return {
+        x: box.x0 * scale + offsetX,
+        y: box.y0 * scale + offsetY,
+        w: (box.x1 - box.x0) * scale,
+        h: (box.y1 - box.y0) * scale,
+    };
+}
+
+function drawDebugBoxes(letters) {
+    const debugCtx = debugCanvas.getContext('2d');
+    debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+    debugCtx.lineWidth = 2;
+
+    for (const letter of letters) {
+        const mappedBox = mapBoxToCanvas(letter.bbox);
+        debugCtx.strokeRect(mappedBox.x, mappedBox.y, mappedBox.w, mappedBox.h);
+    }
+}
+
+function highlightFinalWords(wordsData, letterMap) {
+    const debugCtx = debugCanvas.getContext('2d');
+    debugCtx.strokeStyle = 'rgba(0, 255, 0, 1)';
+    debugCtx.lineWidth = 4;
+
+    const lettersInWords = new Set();
+    wordsData.forEach(wordData => {
+        wordData.path.forEach(coordKey => lettersInWords.add(coordKey));
+    });
+
+    lettersInWords.forEach(key => {
+        const letter = letterMap.get(key);
+        if (letter) {
+            const mappedBox = mapBoxToCanvas(letter.bbox);
+            debugCtx.strokeRect(mappedBox.x, mappedBox.y, mappedBox.w, mappedBox.h);
+        }
+    });
+}
+
+/**
+ * **IMPROVEMENT 2: Filtering by Confidence AND Size**
+ * This function now filters out symbols that are too small or too large
+ * compared to the median size of all other detected letters.
+ */
 function reconstructGrid(symbols) {
-    if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
+    if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map(), allLetters: [] };
 
-    // The symbols are already pre-filtered for confidence, so we just need to check the text format.
-    const letters = symbols
+    // Step 1: Filter by confidence and basic format
+    let letters = symbols
+        .filter(s => s.confidence > CONFIDENCE_THRESHOLD && /^[A-Z]$/.test(s.text.trim()))
         .map(s => ({
-            text: s.text.trim().toUpperCase(),
+            text: s.text.trim(),
             bbox: s.bbox,
             cx: (s.bbox.x0 + s.bbox.x1) / 2,
-            cy: (s.bbox.y0 + s.bbox.y1) / 2
-        }))
-        .filter(s => /^[A-Z]$/.test(s.text));
+            cy: (s.bbox.y0 + s.bbox.y1) / 2,
+            width: s.bbox.x1 - s.bbox.x0,
+            height: s.bbox.y1 - s.bbox.y0,
+        }));
 
-    if (letters.length < 2) return { grid: new Map(), letterMap: new Map() };
+    if (letters.length < 2) return { grid: new Map(), letterMap: new Map(), allLetters: letters };
 
-    const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
-    const medianTileSize = widths[Math.floor(widths.length / 2)] || 20;
-    const tolerance = medianTileSize * 0.5;
+    // Step 2: Filter by size. Calculate median size first.
+    const heights = letters.map(l => l.height).sort((a, b) => a - b);
+    const medianHeight = heights[Math.floor(heights.length / 2)];
+    const minHeight = medianHeight * (1 - SIZE_DEVIATION_THRESHOLD);
+    const maxHeight = medianHeight * (1 + SIZE_DEVIATION_THRESHOLD);
 
+    letters = letters.filter(l => l.height >= minHeight && l.height <= maxHeight);
+    
+    const allFilteredLetters = [...letters]; // Keep a copy for drawing debug boxes
+
+    if (letters.length < 2) return { grid: new Map(), letterMap: new Map(), allLetters: allFilteredLetters };
+
+    // Step 3: Cluster remaining letters into a grid (same as before)
+    const tolerance = medianHeight * 0.5;
     const findCoordinateLanes = (coords) => {
         coords.sort((a, b) => a - b);
         if (coords.length === 0) return [];
         const lanes = [[coords[0]]];
         for (let i = 1; i < coords.length; i++) {
-            if (coords[i] - lanes[lanes.length - 1][0] < tolerance) {
-                lanes[lanes.length - 1].push(coords[i]);
-            } else {
-                lanes.push([coords[i]]);
-            }
+            if (coords[i] - lanes[lanes.length - 1][0] < tolerance) lanes[lanes.length - 1].push(coords[i]);
+            else lanes.push([coords[i]]);
         }
         return lanes.map(lane => lane.reduce((a, b) => a + b, 0) / lane.length);
     };
-
     const xLanes = findCoordinateLanes(letters.map(l => l.cx));
     const yLanes = findCoordinateLanes(letters.map(l => l.cy));
-
     const findClosestLaneIndex = (coord, lanes) => {
-        let closestIndex = 0;
-        let minDiff = Infinity;
+        let closestIndex = 0, minDiff = Infinity;
         for (let i = 0; i < lanes.length; i++) {
             const diff = Math.abs(coord - lanes[i]);
-            if (diff < minDiff) {
-                minDiff = diff;
-                closestIndex = i;
-            }
+            if (diff < minDiff) { minDiff = diff; closestIndex = i; }
         }
         return closestIndex;
     };
 
-    const grid = new Map();
-    const letterMap = new Map();
+    const grid = new Map(), letterMap = new Map();
     for (const letter of letters) {
         const gridX = findClosestLaneIndex(letter.cx, xLanes);
         const gridY = findClosestLaneIndex(letter.cy, yLanes);
@@ -170,10 +239,10 @@ function reconstructGrid(symbols) {
             letterMap.set(key, letter);
         }
     }
-    return { grid, letterMap };
+    return { grid, letterMap, allLetters: allFilteredLetters };
 }
 
-// --- Setup and other functions (unchanged) ---
+// --- Setup and other functions (unchanged from previous correct versions) ---
 
 async function setupCamera() {
     try {
@@ -188,8 +257,9 @@ async function setupCamera() {
         video.play();
         const isStreamLandscape = video.videoWidth > video.videoHeight;
         video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
-        debugCanvas.width = video.clientWidth;
-        debugCanvas.height = video.clientHeight;
+        // Set canvas size once video is playing and has dimensions
+        debugCanvas.width = debugCanvas.clientWidth;
+        debugCanvas.height = debugCanvas.clientHeight;
         return true;
     } catch (err) {
         console.error("Error accessing camera: ", err);
@@ -262,38 +332,6 @@ function processWords(wordsData) {
     });
     totalScoreEl.textContent = `Total Score: ${totalScore}`;
     resultsPanel.classList.add('visible');
-}
-
-function drawDebugBoxes(symbols) {
-    const debugCtx = debugCanvas.getContext('2d');
-    const scaleX = debugCanvas.width / canvas.width;
-    const scaleY = debugCanvas.height / canvas.height;
-    debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-    debugCtx.lineWidth = 2;
-    // Note: The symbols passed here are already pre-filtered for confidence
-    for (const symbol of symbols) {
-        const { x0, y0, x1, y1 } = symbol.bbox;
-        debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
-    }
-}
-
-function highlightFinalWords(wordsData, letterMap) {
-    const debugCtx = debugCanvas.getContext('2d');
-    const scaleX = debugCanvas.width / canvas.width;
-    const scaleY = debugCanvas.height / canvas.height;
-    debugCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
-    debugCtx.lineWidth = 4;
-    const lettersInWords = new Set();
-    wordsData.forEach(wordData => {
-        wordData.path.forEach(coordKey => lettersInWords.add(coordKey));
-    });
-    lettersInWords.forEach(key => {
-        const letter = letterMap.get(key);
-        if (letter) {
-            const { x0, y0, x1, y1 } = letter.bbox;
-            debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
-        }
-    });
 }
 
 function extractWordsFromGrid(grid) {
