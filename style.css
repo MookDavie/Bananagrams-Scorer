@@ -9,7 +9,6 @@ body {
     position: relative;
 }
 
-/* --- THIS IS THE CORRECTED PART --- */
 #camera-container {
     position: fixed;
     top: 0;
@@ -18,57 +17,32 @@ body {
     height: 100vh;
     overflow: hidden;
     z-index: -1;
-    /* Use Flexbox to center the child video element */
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
 #video {
-    /* Remove absolute positioning and top/left */
-    /* position: absolute; */
-    /* top: 50%; */
-    /* left: 50%; */
-
-    /* Ensure the video is larger than the screen in both dimensions */
-    min-width: 100vh; /* Use vh for width when rotated */
-    min-height: 100vw; /* Use vw for height when rotated */
+    min-width: 100vh;
+    min-height: 100vw;
     width: auto;
     height: auto;
-    
-    /* The transform for rotation will be set by JavaScript */
-    /* Example: transform: rotate(90deg); */
 }
-/* --- END OF CORRECTION --- */
 
-#scan-overlay {
+#overlay {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
-    --guide-width: 80vw;
-    --guide-height: 15vh;
-    --guide-top: 35vh;
-    clip-path: polygon(
-        0% 0%, 0% 100%, 100% 100%, 100% 0%, 0% 0%,
-        calc(50% - var(--guide-width) / 2) var(--guide-top),
-        calc(50% + var(--guide-width) / 2) var(--guide-top),
-        calc(50% + var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
-        calc(50% - var(--guide-width) / 2) calc(var(--guide-top) + var(--guide-height)),
-        calc(50% - var(--guide-width) / 2) var(--guide-top)
-    );
-    border: 2px solid #ffc107;
-    border-radius: 12px;
-    box-sizing: border-box;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 5vh;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
 }
 
-#overlay-text {
-    position: absolute;
-    top: 25vh;
-    width: 100%;
-    color: white;
+#overlay p {
     font-size: 1.2em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
@@ -96,12 +70,7 @@ body {
     border: 4px solid white;
     border-radius: 50%;
     cursor: pointer;
-    transition: background-color 0.2s;
     -webkit-tap-highlight-color: transparent;
-}
-
-#scanButton:active {
-    background-color: #e0a800;
 }
 
 #results-panel {
