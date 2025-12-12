@@ -15,6 +15,8 @@ let currentState = AppState.INITIALIZING;
 let liveViewIntervalId = null;
 let lastRecognizedWordsData = [];
 
+const CONFIDENCE_THRESHOLD = 60; // **KEY IMPROVEMENT**: Ignore recognitions below this confidence (0-100)
+
 const letterScores = {
     'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1,
     'J': 8, 'K': 5, 'L': 1, 'M': 3, 'N': 1, 'O': 1, 'P': 3, 'Q': 10, 'R': 1,
@@ -80,51 +82,44 @@ async function runRecognition() {
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // **IMPROVEMENT 1: Image Preprocessing**
-    // Convert to grayscale to improve contrast and OCR accuracy.
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
         const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        data[i] = avg;     // red
-        data[i + 1] = avg; // green
-        data[i + 2] = avg; // blue
+        data[i] = avg; data[i + 1] = avg; data[i + 2] = avg;
     }
     ctx.putImageData(imageData, 0, 0);
 
-    // **IMPROVEMENT 2: Tesseract Whitelist**
-    // Tell Tesseract to only recognize uppercase letters.
     const { data: ocrData } = await tesseractScheduler.addJob('recognize', canvas, {
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
     });
 
-    const { grid, letterMap } = reconstructGrid(ocrData.symbols);
+    // Filter symbols by confidence BEFORE processing them
+    const highConfidenceSymbols = ocrData.symbols.filter(s => s.confidence > CONFIDENCE_THRESHOLD);
+
+    const { grid, letterMap } = reconstructGrid(highConfidenceSymbols);
     const wordsData = extractWordsFromGrid(grid);
     
     lastRecognizedWordsData = wordsData;
 
     const debugCtx = debugCanvas.getContext('2d');
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-    drawDebugBoxes(ocrData.symbols);
+    drawDebugBoxes(highConfidenceSymbols); // Draw boxes only for high-confidence symbols
     highlightFinalWords(wordsData, letterMap);
 }
 
-// --- Core Logic: Advanced Grid Reconstruction ---
+// --- Core Logic: Grid Reconstruction and Word Extraction ---
 
-/**
- * **IMPROVEMENT 3: Advanced Grid Reconstruction**
- * This new function uses a clustering algorithm to find the "lanes" of letters,
- * making it much more robust against rotation and uneven spacing.
- */
 function reconstructGrid(symbols) {
     if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
 
+    // The symbols are already pre-filtered for confidence, so we just need to check the text format.
     const letters = symbols
         .map(s => ({
             text: s.text.trim().toUpperCase(),
             bbox: s.bbox,
-            cx: (s.bbox.x0 + s.bbox.x1) / 2, // center x
-            cy: (s.bbox.y0 + s.bbox.y1) / 2  // center y
+            cx: (s.bbox.x0 + s.bbox.x1) / 2,
+            cy: (s.bbox.y0 + s.bbox.y1) / 2
         }))
         .filter(s => /^[A-Z]$/.test(s.text));
 
@@ -132,9 +127,8 @@ function reconstructGrid(symbols) {
 
     const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
     const medianTileSize = widths[Math.floor(widths.length / 2)] || 20;
-    const tolerance = medianTileSize * 0.5; // How close coords need to be to be in the same lane
+    const tolerance = medianTileSize * 0.5;
 
-    // Helper function to find coordinate clusters (lanes)
     const findCoordinateLanes = (coords) => {
         coords.sort((a, b) => a - b);
         if (coords.length === 0) return [];
@@ -146,13 +140,12 @@ function reconstructGrid(symbols) {
                 lanes.push([coords[i]]);
             }
         }
-        return lanes.map(lane => lane.reduce((a, b) => a + b, 0) / lane.length); // Return average of each lane
+        return lanes.map(lane => lane.reduce((a, b) => a + b, 0) / lane.length);
     };
 
     const xLanes = findCoordinateLanes(letters.map(l => l.cx));
     const yLanes = findCoordinateLanes(letters.map(l => l.cy));
 
-    // Helper to find the closest lane index for a given coordinate
     const findClosestLaneIndex = (coord, lanes) => {
         let closestIndex = 0;
         let minDiff = Infinity;
@@ -180,8 +173,7 @@ function reconstructGrid(symbols) {
     return { grid, letterMap };
 }
 
-
-// --- Setup and other functions (mostly unchanged) ---
+// --- Setup and other functions (unchanged) ---
 
 async function setupCamera() {
     try {
@@ -278,8 +270,8 @@ function drawDebugBoxes(symbols) {
     const scaleY = debugCanvas.height / canvas.height;
     debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
     debugCtx.lineWidth = 2;
+    // Note: The symbols passed here are already pre-filtered for confidence
     for (const symbol of symbols) {
-        if (!/^[A-Z]$/.test(symbol.text.trim().toUpperCase())) continue;
         const { x0, y0, x1, y1 } = symbol.bbox;
         debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
     }
