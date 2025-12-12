@@ -29,6 +29,18 @@ body {
     height: auto;
 }
 
+/* --- NEW --- Style for the debug canvas overlay */
+#debug-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5; /* Above video, below controls */
+    pointer-events: none; /* Allows clicks to pass through */
+}
+/* --- END NEW --- */
+
 #overlay {
     position: absolute;
     top: 0;
@@ -40,6 +52,7 @@ body {
     justify-content: center;
     padding-top: 5vh;
     background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    pointer-events: none; /* Allows clicks to pass through */
 }
 
 #overlay p {
