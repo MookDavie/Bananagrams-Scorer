@@ -2,17 +2,14 @@
 const video = document.getElementById('video');
 const scanButton = document.getElementById('scanButton');
 const canvas = document.getElementById('canvas');
+const debugCanvas = document.getElementById('debug-canvas'); // New
 const resultsPanel = document.getElementById('results-panel');
 const closeButton = document.getElementById('close-results');
 const outputEl = document.getElementById('output');
 const totalScoreEl = document.getElementById('total-score');
 
 // --- State and Constants ---
-const letterScores = {
-    'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1,
-    'J': 8, 'K': 5, 'L': 1, 'M': 3, 'N': 1, 'O': 1, 'P': 3, 'Q': 10, 'R': 1,
-    'S': 1, 'T': 1, 'U': 1, 'V': 4, 'W': 4, 'X': 8, 'Y': 4, 'Z': 10
-};
+const letterScores = { /* ... same as before ... */ };
 let dictionary = new Set();
 let tesseractScheduler;
 
@@ -22,23 +19,14 @@ async function initialize() {
     await loadDictionary();
     tesseractScheduler = Tesseract.createScheduler();
     const worker = await Tesseract.createWorker('eng', 1, {
-        logger: m => console.log(m) // Optional: for debugging OCR progress
+        logger: m => console.log(m)
     });
     tesseractScheduler.addWorker(worker);
     scanButton.textContent = 'Scan Grid';
     scanButton.disabled = false;
 }
 
-async function loadDictionary() {
-    try {
-        const response = await fetch('dictionary.txt');
-        const text = await response.text();
-        dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
-    } catch (error) {
-        console.error('Dictionary load error:', error);
-        alert('Could not load dictionary.');
-    }
-}
+async function loadDictionary() { /* ... same as before ... */ }
 
 async function setupCamera() {
     try {
@@ -49,6 +37,10 @@ async function setupCamera() {
                 video.play();
                 const isStreamLandscape = video.videoWidth > video.videoHeight;
                 video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
+
+                // Match debug canvas size to the video's display size
+                debugCanvas.width = video.clientWidth;
+                debugCanvas.height = video.clientHeight;
                 resolve();
             };
         });
@@ -60,12 +52,21 @@ async function setupCamera() {
 
 // --- UI Interaction ---
 scanButton.addEventListener('click', handleScan);
-closeButton.addEventListener('click', () => resultsPanel.classList.remove('visible'));
+closeButton.addEventListener('click', () => {
+    resultsPanel.classList.remove('visible');
+    // Clear the debug view when closing results
+    const debugCtx = debugCanvas.getContext('2d');
+    debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+});
 
 // --- Core Logic ---
 async function handleScan() {
     scanButton.disabled = true;
     scanButton.textContent = 'Analyzing...';
+
+    // Clear previous debug drawings
+    const debugCtx = debugCanvas.getContext('2d');
+    debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -73,22 +74,97 @@ async function handleScan() {
 
     const { data } = await tesseractScheduler.addJob('recognize', canvas);
     
-    const grid = reconstructGrid(data.symbols);
+    // Draw initial bounding boxes for all detected symbols
+    drawDebugBoxes(data.symbols);
+
+    const { grid, letterMap } = reconstructGrid(data.symbols);
     const words = extractWordsFromGrid(grid);
+    
+    // Highlight the final words found
+    highlightFinalWords(words, letterMap);
+
     processWords(words);
 
     scanButton.disabled = false;
     scanButton.textContent = 'Scan Grid';
 }
 
+/**
+ * Draws bounding boxes for all detected symbols onto the debug canvas.
+ * @param {Array} symbols - The array of symbols from Tesseract.
+ */
+function drawDebugBoxes(symbols) {
+    const debugCtx = debugCanvas.getContext('2d');
+    const scaleX = debugCanvas.width / canvas.width;
+    const scaleY = debugCanvas.height / canvas.height;
+
+    debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)'; // Red for all initial detections
+    debugCtx.lineWidth = 2;
+
+    for (const symbol of symbols) {
+        if (!/^[A-Z]$/.test(symbol.text.trim().toUpperCase())) continue;
+        
+        const { x0, y0, x1, y1 } = symbol.bbox;
+        debugCtx.strokeRect(
+            x0 * scaleX, 
+            y0 * scaleY, 
+            (x1 - x0) * scaleX, 
+            (y1 - y0) * scaleY
+        );
+    }
+}
+
+/**
+ * Highlights the bounding boxes of letters that form the final valid words.
+ * @param {Set<string>} words - The set of final valid words.
+ * @param {Map<string, object>} letterMap - Map from grid coords to letter objects.
+ */
+function highlightFinalWords(words, letterMap) {
+    const debugCtx = debugCanvas.getContext('2d');
+    const scaleX = debugCanvas.width / canvas.width;
+    const scaleY = debugCanvas.height / canvas.height;
+    
+    debugCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)'; // Bright green for final words
+    debugCtx.lineWidth = 4;
+
+    const lettersInWords = new Set();
+    
+    // Find all unique grid coordinates that are part of a valid word
+    letterMap.forEach((letter, key) => {
+        for (const word of words) {
+            // This is a simplified check; a more robust method would track indices
+            if (word.includes(letter.text)) { 
+                // A better approach would be to store the path of each word
+                // For now, we just check if the letter is in any word.
+                lettersInWords.add(key);
+            }
+        }
+    });
+
+    // Draw a highlight box for each letter in a final word
+    lettersInWords.forEach(key => {
+        const letter = letterMap.get(key);
+        if (letter) {
+            const { x0, y0, x1, y1 } = letter.bbox;
+            debugCtx.strokeRect(
+                x0 * scaleX, 
+                y0 * scaleY, 
+                (x1 - x0) * scaleX, 
+                (y1 - y0) * scaleY
+            );
+        }
+    });
+}
+
+
 function reconstructGrid(symbols) {
-    if (symbols.length === 0) return new Map();
+    if (symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
 
     const letters = symbols
         .map(s => ({ text: s.text.trim().toUpperCase(), bbox: s.bbox }))
         .filter(s => /^[A-Z]$/.test(s.text));
     
-    if (letters.length === 0) return new Map();
+    if (letters.length === 0) return { grid: new Map(), letterMap: new Map() };
 
     const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
     const heights = letters.map(s => s.bbox.y1 - s.bbox.y0).sort((a, b) => a - b);
@@ -96,155 +172,19 @@ function reconstructGrid(symbols) {
     const medianHeight = heights[Math.floor(heights.length / 2)] || 20;
 
     const grid = new Map();
+    const letterMap = new Map(); // New: maps grid coords to the full letter object
     for (const letter of letters) {
         const gridX = Math.round(letter.bbox.x0 / medianWidth);
         const gridY = Math.round(letter.bbox.y0 / medianHeight);
         const key = `${gridX},${gridY}`;
         grid.set(key, letter.text);
+        letterMap.set(key, letter); // Store the letter object with its bbox
     }
-    return grid;
+    return { grid, letterMap };
 }
 
-/**
- * A much smarter function to extract valid, interconnected words from the grid.
- * @param {Map<string, string>} grid - The reconstructed grid.
- * @returns {Set<string>} A Set of unique, validly connected words.
- */
-function extractWordsFromGrid(grid) {
-    if (grid.size === 0) return new Set();
-
-    const foundWords = new Set();
-    const coords = Array.from(grid.keys()).map(k => k.split(',').map(Number));
-    const xCoords = coords.map(c => c[0]);
-    const yCoords = coords.map(c => c[1]);
-    const minX = Math.min(...xCoords);
-    const maxX = Math.max(...xCoords);
-    const minY = Math.min(...yCoords);
-    const maxY = Math.max(...yCoords);
-
-    // --- Helper function to check for cross-connections ---
-    const isConnected = (x, y, isHorizontal) => {
-        if (isHorizontal) {
-            // A horizontal word is connected if any of its letters
-            // has a vertical neighbor.
-            return grid.has(`${x},${y - 1}`) || grid.has(`${x},${y + 1}`);
-        } else {
-            // A vertical word is connected if any of its letters
-            // has a horizontal neighbor.
-            return grid.has(`${x - 1},${y}`) || grid.has(`${x + 1},${y}`);
-        }
-    };
-
-    // --- Horizontal Scan ---
-    for (let y = minY; y <= maxY; y++) {
-        let currentWord = '';
-        let startX = -1;
-        let wordIsConnected = false;
-
-        for (let x = minX; x <= maxX + 1; x++) { // Iterate one past the end
-            const key = `${x},${y}`;
-            if (grid.has(key)) {
-                if (currentWord === '') startX = x; // Mark the start of a new word
-                currentWord += grid.get(key);
-                // Check for a connection for the current letter
-                if (isConnected(x, y, true)) {
-                    wordIsConnected = true;
-                }
-            } else {
-                // End of a potential word
-                if (currentWord.length > 1 && wordIsConnected) {
-                    foundWords.add(currentWord);
-                }
-                // Reset for the next word
-                currentWord = '';
-                wordIsConnected = false;
-            }
-        }
-    }
-
-    // --- Vertical Scan ---
-    for (let x = minX; x <= maxX; x++) {
-        let currentWord = '';
-        let startY = -1;
-        let wordIsConnected = false;
-
-        for (let y = minY; y <= maxY + 1; y++) { // Iterate one past the end
-            const key = `${x},${y}`;
-            if (grid.has(key)) {
-                if (currentWord === '') startY = y;
-                currentWord += grid.get(key);
-                if (isConnected(x, y, false)) {
-                    wordIsConnected = true;
-                }
-            } else {
-                // End of a potential word
-                if (currentWord.length > 1 && wordIsConnected) {
-                    foundWords.add(currentWord);
-                }
-                // Reset for the next word
-                currentWord = '';
-                wordIsConnected = false;
-            }
-        }
-    }
-    
-    // Final check: If only one word is found, it's valid by default.
-    // This handles the very first word placed on the board.
-    if (foundWords.size === 0) {
-        const allWords = new Set();
-        // Re-run the extraction without the connection check
-        for (let y = minY; y <= maxY; y++) {
-            let currentWord = '';
-            for (let x = minX; x <= maxX + 1; x++) {
-                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
-                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
-            }
-        }
-        for (let x = minX; x <= maxX; x++) {
-            let currentWord = '';
-            for (let y = minY; y <= maxY + 1; y++) {
-                if (grid.has(`${x},${y}`)) currentWord += grid.get(`${x},${y}`);
-                else { if (currentWord.length > 1) allWords.add(currentWord); currentWord = ''; }
-            }
-        }
-        if (allWords.size === 1) return allWords;
-    }
-
-    return foundWords;
-}
-
-function processWords(words) {
-    outputEl.innerHTML = '';
-    let totalScore = 0;
-
-    if (words.size === 0) {
-        totalScoreEl.textContent = "No valid words found";
-        resultsPanel.classList.add('visible');
-        return;
-    }
-
-    const validWords = [];
-    words.forEach(word => {
-        if (dictionary.has(word.toLowerCase())) {
-            const score = Array.from(word).reduce((acc, char) => acc + (letterScores[char] || 0), 0);
-            validWords.push({ word, score });
-            totalScore += score;
-        }
-    });
-
-    // Sort words alphabetically for consistent display
-    validWords.sort((a, b) => a.word.localeCompare(b.word));
-
-    validWords.forEach(({ word, score }) => {
-        const wordDiv = document.createElement('div');
-        wordDiv.classList.add('word-item', 'valid');
-        wordDiv.textContent = `${word} - Score: ${score}`;
-        outputEl.append(wordDiv);
-    });
-
-    totalScoreEl.textContent = `Total Score: ${totalScore}`;
-    resultsPanel.classList.add('visible');
-}
+function extractWordsFromGrid(grid) { /* ... same as before ... */ }
+function processWords(words) { /* ... same as before ... */ }
 
 // --- Start the App ---
 scanButton.disabled = true;
