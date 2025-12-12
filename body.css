@@ -1,0 +1,79 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    text-align: center;
+    margin: 0;
+    padding: 1rem; /* Use rem for better scalability */
+}
+
+#container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+#video {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    background-color: #000;
+}
+
+#scanButton {
+    display: block;
+    width: 100%;
+    padding: 15px;
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #fff;
+    background-color: #ffc107; /* Banana Yellow */
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 15px;
+    transition: background-color 0.2s;
+    -webkit-tap-highlight-color: transparent; /* Better mobile tap feedback */
+}
+
+#scanButton:active {
+    background-color: #e0a800;
+}
+
+#results {
+    text-align: left;
+    max-width: 600px;
+    margin: 20px auto;
+    padding: 0 1rem;
+}
+
+#status {
+    background-color: #eee;
+    padding: 10px;
+    border-radius: 4px;
+    white-space: pre-wrap; /* Allows line breaks */
+    word-wrap: break-word;
+    font-size: 0.9em;
+}
+
+.word-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    font-weight: 500;
+}
+
+.valid {
+    background-color: #d4edda; /* Light green */
+    border-left: 5px solid #28a745; /* Green */
+}
+
+.invalid {
+    background-color: #f8d7da; /* Light red */
+    border-left: 5px solid #dc3545; /* Red */
+    text-decoration: line-through;
+}

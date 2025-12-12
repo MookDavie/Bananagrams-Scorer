@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- This line is critical for mobile devices -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bananagrams Scorer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Bananagrams Scorer</h1>
+    <div id="container">
+        <p>Point your camera at your Bananagrams words and hit Scan!</p>
+        
+        <!-- The video element will show the camera feed -->
+        <video id="video" playsinline autoplay muted></video>
+        
+        <button id="scanButton">Scan Words</button>
+        
+        <!-- A hidden canvas for capturing a single frame -->
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+    
+    <div id="results">
+        <h2>Results</h2>
+        <pre id="status">Loading dictionary...</pre>
+        <div id="output"></div>
+    </div>
+
+    <!-- Tesseract.js library for OCR -->
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    
+    <!-- Our main application script -->
+    <script src="scorer.js"></script>
+</body>
+</html>
