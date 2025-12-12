@@ -9,12 +9,13 @@
 <body>
     <div id="camera-container">
         <video id="video" playsinline autoplay muted></video>
-        <div id="scan-overlay"></div>
-        <p id="overlay-text">Align a single word in the box</p>
+        <div id="overlay">
+            <p>Fit the entire grid in the frame and press Scan</p>
+        </div>
     </div>
 
     <div id="controls">
-        <button id="scanButton">Scan</button>
+        <button id="scanButton">Scan Grid</button>
     </div>
 
     <div id="results-panel">
@@ -22,18 +23,12 @@
             <h2 id="total-score">Total Score: 0</h2>
             <button id="close-results">Close</button>
         </div>
-        <div id="output">
-            <!-- Scanned words will appear here -->
-        </div>
+        <div id="output"></div>
     </div>
 
-    <!-- Hidden canvas for processing -->
     <canvas id="canvas" style="display:none;"></canvas>
 
-    <!-- Tesseract.js library -->
     <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
-    
-    <!-- Our application script -->
     <script src="scorer.js"></script>
 </body>
 </html>
