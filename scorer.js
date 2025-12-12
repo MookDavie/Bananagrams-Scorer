@@ -10,12 +10,7 @@ const totalScoreEl = document.getElementById('total-score');
 const overlayText = document.querySelector('#overlay p');
 
 // --- State and Constants ---
-const AppState = {
-    INITIALIZING: 'INITIALIZING',
-    IDLE: 'IDLE', // Ready to start live view
-    LIVE_VIEW: 'LIVE_VIEW', // Actively recognizing
-    SCORING: 'SCORING', // Button pressed, calculating score
-};
+const AppState = { INITIALIZING: 'INITIALIZING', IDLE: 'IDLE', LIVE_VIEW: 'LIVE_VIEW', SCORING: 'SCORING' };
 let currentState = AppState.INITIALIZING;
 let liveViewIntervalId = null;
 let lastRecognizedWordsData = [];
@@ -28,95 +23,165 @@ const letterScores = {
 let dictionary = new Set();
 let tesseractScheduler;
 
-// --- Initialization Flow ---
+// --- Initialization and State Machine ---
 async function initialize() {
     if (!await setupCamera()) return;
     if (!await loadDictionary()) return;
     if (!await setupTesseract()) return;
-
     setState(AppState.IDLE);
 }
 
-// --- State Machine ---
 function setState(newState) {
     currentState = newState;
     mainButton.disabled = false;
-
     switch (newState) {
         case AppState.INITIALIZING:
-            mainButton.disabled = true;
-            mainButton.textContent = 'Starting...';
-            overlayText.textContent = 'Initializing...';
+            mainButton.disabled = true; mainButton.textContent = 'Starting...'; overlayText.textContent = 'Initializing...';
             break;
         case AppState.IDLE:
-            mainButton.textContent = 'Start Live View';
-            overlayText.textContent = 'Press "Start" to begin recognition';
+            mainButton.textContent = 'Start Live View'; overlayText.textContent = 'Press "Start" to begin recognition';
             if (liveViewIntervalId) clearInterval(liveViewIntervalId);
             break;
         case AppState.LIVE_VIEW:
-            mainButton.textContent = 'Score Grid';
-            overlayText.textContent = 'Align your grid, then press "Score"';
+            mainButton.textContent = 'Score Grid'; overlayText.textContent = 'Align your grid, then press "Score"';
             startLiveRecognition();
             break;
         case AppState.SCORING:
-            mainButton.disabled = true;
-            mainButton.textContent = 'Scoring...';
+            mainButton.disabled = true; mainButton.textContent = 'Scoring...';
             if (liveViewIntervalId) clearInterval(liveViewIntervalId);
             processWords(lastRecognizedWordsData);
             break;
     }
 }
 
-// --- Main Button Logic ---
 mainButton.addEventListener('click', () => {
-    if (currentState === AppState.IDLE) {
-        setState(AppState.LIVE_VIEW);
-    } else if (currentState === AppState.LIVE_VIEW) {
-        setState(AppState.SCORING);
-    }
+    if (currentState === AppState.IDLE) setState(AppState.LIVE_VIEW);
+    else if (currentState === AppState.LIVE_VIEW) setState(AppState.SCORING);
 });
 
 closeButton.addEventListener('click', () => {
     resultsPanel.classList.remove('visible');
     const debugCtx = debugCanvas.getContext('2d');
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-    // Return to IDLE state after closing results
     setState(AppState.IDLE);
 });
 
 // --- Live Recognition Loop ---
 function startLiveRecognition() {
     if (liveViewIntervalId) clearInterval(liveViewIntervalId);
-    // Run recognition at a throttled rate to save performance
-    liveViewIntervalId = setInterval(runRecognition, 750); // ~1.3 times per second
+    liveViewIntervalId = setInterval(runRecognition, 750);
 }
 
 async function runRecognition() {
     if (currentState !== AppState.LIVE_VIEW) return;
 
-    // Capture frame
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Run OCR
-    const { data } = await tesseractScheduler.addJob('recognize', canvas);
+    // **IMPROVEMENT 1: Image Preprocessing**
+    // Convert to grayscale to improve contrast and OCR accuracy.
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        data[i] = avg;     // red
+        data[i + 1] = avg; // green
+        data[i + 2] = avg; // blue
+    }
+    ctx.putImageData(imageData, 0, 0);
 
-    // Process and draw results
-    const { grid, letterMap } = reconstructGrid(data.symbols);
+    // **IMPROVEMENT 2: Tesseract Whitelist**
+    // Tell Tesseract to only recognize uppercase letters.
+    const { data: ocrData } = await tesseractScheduler.addJob('recognize', canvas, {
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+
+    const { grid, letterMap } = reconstructGrid(ocrData.symbols);
     const wordsData = extractWordsFromGrid(grid);
     
-    // Store the latest results for scoring
     lastRecognizedWordsData = wordsData;
 
-    // Clear previous drawings and draw new ones
     const debugCtx = debugCanvas.getContext('2d');
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-    drawDebugBoxes(data.symbols);
+    drawDebugBoxes(ocrData.symbols);
     highlightFinalWords(wordsData, letterMap);
 }
 
-// --- Setup and Processing Functions (mostly unchanged) ---
+// --- Core Logic: Advanced Grid Reconstruction ---
+
+/**
+ * **IMPROVEMENT 3: Advanced Grid Reconstruction**
+ * This new function uses a clustering algorithm to find the "lanes" of letters,
+ * making it much more robust against rotation and uneven spacing.
+ */
+function reconstructGrid(symbols) {
+    if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
+
+    const letters = symbols
+        .map(s => ({
+            text: s.text.trim().toUpperCase(),
+            bbox: s.bbox,
+            cx: (s.bbox.x0 + s.bbox.x1) / 2, // center x
+            cy: (s.bbox.y0 + s.bbox.y1) / 2  // center y
+        }))
+        .filter(s => /^[A-Z]$/.test(s.text));
+
+    if (letters.length < 2) return { grid: new Map(), letterMap: new Map() };
+
+    const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
+    const medianTileSize = widths[Math.floor(widths.length / 2)] || 20;
+    const tolerance = medianTileSize * 0.5; // How close coords need to be to be in the same lane
+
+    // Helper function to find coordinate clusters (lanes)
+    const findCoordinateLanes = (coords) => {
+        coords.sort((a, b) => a - b);
+        if (coords.length === 0) return [];
+        const lanes = [[coords[0]]];
+        for (let i = 1; i < coords.length; i++) {
+            if (coords[i] - lanes[lanes.length - 1][0] < tolerance) {
+                lanes[lanes.length - 1].push(coords[i]);
+            } else {
+                lanes.push([coords[i]]);
+            }
+        }
+        return lanes.map(lane => lane.reduce((a, b) => a + b, 0) / lane.length); // Return average of each lane
+    };
+
+    const xLanes = findCoordinateLanes(letters.map(l => l.cx));
+    const yLanes = findCoordinateLanes(letters.map(l => l.cy));
+
+    // Helper to find the closest lane index for a given coordinate
+    const findClosestLaneIndex = (coord, lanes) => {
+        let closestIndex = 0;
+        let minDiff = Infinity;
+        for (let i = 0; i < lanes.length; i++) {
+            const diff = Math.abs(coord - lanes[i]);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closestIndex = i;
+            }
+        }
+        return closestIndex;
+    };
+
+    const grid = new Map();
+    const letterMap = new Map();
+    for (const letter of letters) {
+        const gridX = findClosestLaneIndex(letter.cx, xLanes);
+        const gridY = findClosestLaneIndex(letter.cy, yLanes);
+        const key = `${gridX},${gridY}`;
+        if (!grid.has(key)) {
+            grid.set(key, letter.text);
+            letterMap.set(key, letter);
+        }
+    }
+    return { grid, letterMap };
+}
+
+
+// --- Setup and other functions (mostly unchanged) ---
 
 async function setupCamera() {
     try {
@@ -182,8 +247,7 @@ function processWords(wordsData) {
     let totalScore = 0;
     if (!wordsData || wordsData.length === 0) {
         totalScoreEl.textContent = "No valid words found";
-        resultsPanel.classList.add('visible');
-        return;
+        resultsPanel.classList.add('visible'); return;
     }
     const validWords = [];
     wordsData.forEach(data => {
@@ -195,8 +259,7 @@ function processWords(wordsData) {
     });
     if (validWords.length === 0) {
         totalScoreEl.textContent = "No valid words found";
-        resultsPanel.classList.add('visible');
-        return;
+        resultsPanel.classList.add('visible'); return;
     }
     validWords.sort((a, b) => a.word.localeCompare(b.word));
     validWords.forEach(({ word, score }) => {
@@ -209,7 +272,6 @@ function processWords(wordsData) {
     resultsPanel.classList.add('visible');
 }
 
-// The following functions are unchanged
 function drawDebugBoxes(symbols) {
     const debugCtx = debugCanvas.getContext('2d');
     const scaleX = debugCanvas.width / canvas.width;
@@ -240,24 +302,6 @@ function highlightFinalWords(wordsData, letterMap) {
             debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
         }
     });
-}
-
-function reconstructGrid(symbols) {
-    if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
-    const letters = symbols.map(s => ({ text: s.text.trim().toUpperCase(), bbox: s.bbox })).filter(s => /^[A-Z]$/.test(s.text));
-    if (letters.length === 0) return { grid: new Map(), letterMap: new Map() };
-    const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
-    const heights = letters.map(s => s.bbox.y1 - s.bbox.y0).sort((a, b) => a - b);
-    const medianWidth = widths[Math.floor(widths.length / 2)] || 20;
-    const medianHeight = heights[Math.floor(heights.length / 2)] || 20;
-    const grid = new Map(), letterMap = new Map();
-    for (const letter of letters) {
-        const gridX = Math.round(letter.bbox.x0 / medianWidth);
-        const gridY = Math.round(letter.bbox.y0 / medianHeight);
-        const key = `${gridX},${gridY}`;
-        if (!grid.has(key)) { grid.set(key, letter.text); letterMap.set(key, letter); }
-    }
-    return { grid, letterMap };
 }
 
 function extractWordsFromGrid(grid) {
