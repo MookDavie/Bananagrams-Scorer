@@ -5,10 +5,8 @@ body {
     text-align: center;
     margin: 0;
     padding: 0;
-    /* Removed: height: 100vh; width: 100vw; overflow: hidden; position: fixed; */
-    /* Let body be normal, but ensure its children fill the screen */
     min-height: 100vh; /* Ensure body is at least viewport height */
-    position: relative; /* For absolutely positioned children if needed, though fixed is used below */
+    position: relative;
 }
 
 /* Main container for the camera view */
@@ -23,15 +21,14 @@ body {
 }
 
 #video {
-    /* Ensure video covers the entire screen, centered */
-    min-width: 100%;
-    min-height: 100%;
-    width: auto;
-    height: auto;
+    width: 100%; /* Fill container width */
+    height: 100%; /* Fill container height */
+    object-fit: cover; /* Maintain aspect ratio, cover container, crop if needed */
     position: absolute;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%);
+    /* transform will be set by JavaScript to handle centering and rotation */
+    /* transform: translate(-50%, -50%) [rotate(90deg)]; */
 }
 
 /* The overlay with the guide box */
