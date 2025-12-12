@@ -24,9 +24,66 @@ function yieldToMainThread() {
 
 // --- Initialization ---
 async function initialize() {
+    // We will handle errors in the specific functions that can fail.
+    const cameraReady = await setupCamera();
+    if (!cameraReady) return; // Stop initialization if camera failed
+
+    const dictionaryReady = await loadDictionary();
+    if (!dictionaryReady) return; // Stop if dictionary failed
+
+    const ocrReady = await setupTesseract();
+    if (!ocrReady) return; // Stop if OCR setup failed
+
+    // If all steps succeeded, enable the button.
+    scanButton.textContent = 'Scan Grid';
+    scanButton.disabled = false;
+}
+
+async function loadDictionary() {
     try {
-        await setupCamera();
-        await loadDictionary();
+        const response = await fetch('dictionary.txt');
+        const text = await response.text();
+        dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
+        return true; // Success
+    } catch (error) {
+        console.error('Dictionary load error:', error);
+        scanButton.textContent = 'Error!';
+        alert('Could not load the dictionary file. Please check your connection and refresh.');
+        return false; // Failure
+    }
+}
+
+async function setupCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = stream;
+        
+        // This promise resolves when the video is ready to play.
+        await new Promise((resolve, reject) => {
+            video.onloadedmetadata = () => {
+                video.play();
+                const isStreamLandscape = video.videoWidth > video.videoHeight;
+                video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
+                debugCanvas.width = video.clientWidth;
+                debugCanvas.height = video.clientHeight;
+                resolve(); // Signal success
+            };
+            // Add an error handler for the video element itself
+            video.onerror = () => {
+                reject(new Error("Video element failed to load stream."));
+            };
+        });
+        return true; // Success
+    } catch (err) {
+        console.error("Error accessing camera: ", err);
+        scanButton.textContent = 'No Camera';
+        alert('Could not access the camera. Please grant permission and refresh the page.');
+        return false; // Failure
+    }
+}
+
+async function setupTesseract() {
+    try {
         tesseractScheduler = Tesseract.createScheduler();
         const worker = await Tesseract.createWorker('eng', 1, {
             logger: m => {
@@ -36,18 +93,14 @@ async function initialize() {
             }
         });
         tesseractScheduler.addWorker(worker);
+        return true; // Success
     } catch (error) {
-        console.error("Initialization failed:", error);
+        console.error("Could not set up Tesseract:", error);
         scanButton.textContent = 'Error!';
-        alert("Initialization failed. Please refresh the page. Check the console for details.");
-    } finally {
-        scanButton.textContent = 'Scan Grid';
-        scanButton.disabled = false;
+        alert("Failed to initialize the OCR engine. Please check your internet connection and refresh.");
+        return false; // Failure
     }
 }
-
-async function loadDictionary() { /* ... same as before ... */ }
-async function setupCamera() { /* ... same as before ... */ }
 
 // --- UI Interaction ---
 closeButton.addEventListener('click', () => {
@@ -58,7 +111,6 @@ closeButton.addEventListener('click', () => {
 
 // --- Core Logic ---
 async function handleScan() {
-    // Disable the button immediately. The 'finally' block will re-enable it.
     scanButton.disabled = true;
     scanButton.textContent = 'Capturing...';
 
@@ -91,11 +143,10 @@ async function handleScan() {
         processWords(words);
 
     } catch (error) {
-        // If anything goes wrong, log it and inform the user.
         console.error("An error occurred during the scan:", error);
-        alert("An error occurred during the scan. Please try again. Check the console for more details.");
+        alert("An error occurred during the scan. Please try again.");
     } finally {
-        // This block is GUARANTEED to run, ensuring the button is always re-enabled.
+        // The robust finally block is perfect here, ensuring the button is always re-enabled after a scan attempt.
         scanButton.disabled = false;
         scanButton.textContent = 'Scan Grid';
     }
@@ -109,5 +160,5 @@ function processWords(words) { /* ... same as before ... */ }
 
 // --- Start the App ---
 scanButton.disabled = true;
-scanButton.textContent = 'Initializing...'; // New initial state
+scanButton.textContent = 'Initializing...';
 initialize();
