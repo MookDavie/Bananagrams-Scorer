@@ -7,7 +7,7 @@ const resultsPanel = document.getElementById('results-panel');
 const closeButton = document.getElementById('close-results');
 const outputEl = document.getElementById('output');
 const totalScoreEl = document.getElementById('total-score');
-const overlayText = document.querySelector('#overlay p'); // Get the overlay text element
+const overlayText = document.querySelector('#overlay p');
 
 // --- State and Constants ---
 const letterScores = {
@@ -25,16 +25,12 @@ function yieldToMainThread() {
 
 // --- Initialization Flow ---
 async function initialize() {
-    const cameraReady = await setupCamera();
-    if (!cameraReady) return;
+    // Each step will now update the UI and return true/false
+    if (!await setupCamera()) return;
+    if (!await loadDictionary()) return;
+    if (!await setupTesseract()) return;
 
-    const dictionaryReady = await loadDictionary();
-    if (!dictionaryReady) return;
-
-    const ocrReady = await setupTesseract();
-    if (!ocrReady) return;
-
-    // All systems go!
+    // If all steps succeeded, the app is ready.
     overlayText.textContent = 'Fit the entire grid in the frame and press Scan';
     scanButton.textContent = 'Scan Grid';
     scanButton.disabled = false;
@@ -42,22 +38,33 @@ async function initialize() {
 
 async function setupCamera() {
     try {
-        overlayText.textContent = 'Requesting camera access...';
+        overlayText.textContent = 'Requesting camera...';
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         video.srcObject = stream;
-        
+
+        // Wait for the video to be ready, but with a timeout.
         await new Promise((resolve, reject) => {
+            const waitTimeout = setTimeout(() => {
+                reject(new Error("Camera setup timed out."));
+            }, 10000); // 10-second timeout
+
             video.onloadedmetadata = () => {
-                video.play();
-                const isStreamLandscape = video.videoWidth > video.videoHeight;
-                video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
-                debugCanvas.width = video.clientWidth;
-                debugCanvas.height = video.clientHeight;
+                clearTimeout(waitTimeout);
                 resolve();
             };
-            video.onerror = () => reject(new Error("Video element failed to load stream."));
+            video.onerror = () => {
+                clearTimeout(waitTimeout);
+                reject(new Error("Video element failed to load stream."));
+            };
         });
-        return true;
+
+        video.play();
+        const isStreamLandscape = video.videoWidth > video.videoHeight;
+        video.style.transform = isStreamLandscape ? 'rotate(90deg)' : 'none';
+        debugCanvas.width = video.clientWidth;
+        debugCanvas.height = video.clientHeight;
+        
+        return true; // Success
     } catch (err) {
         console.error("Error accessing camera: ", err);
         let errorMessage = 'Could not access camera.';
@@ -65,10 +72,12 @@ async function setupCamera() {
             errorMessage = 'Camera access was blocked. Please allow camera in your browser settings.';
         } else if (err.name === "NotFoundError") {
             errorMessage = 'No camera was found on this device.';
+        } else if (err.message.includes("timed out")) {
+            errorMessage = 'Camera failed to start in time. Please refresh and try again.';
         }
-        overlayText.textContent = errorMessage; // Display error on screen
+        overlayText.textContent = errorMessage;
         scanButton.textContent = 'Error';
-        return false;
+        return false; // Failure
     }
 }
 
@@ -76,13 +85,13 @@ async function loadDictionary() {
     try {
         overlayText.textContent = 'Loading dictionary...';
         const response = await fetch('dictionary.txt');
-        if (!response.ok) throw new Error(`Dictionary file not found or failed to load: ${response.statusText}`);
+        if (!response.ok) throw new Error(`Dictionary file not found (404).`);
         const text = await response.text();
         dictionary = new Set(text.split('\n').map(word => word.trim().toLowerCase()));
         return true;
     } catch (error) {
         console.error('Dictionary load error:', error);
-        overlayText.textContent = 'Error: Could not load dictionary file.';
+        overlayText.textContent = `Error: ${error.message}`;
         scanButton.textContent = 'Error';
         return false;
     }
@@ -162,13 +171,10 @@ function drawDebugBoxes(symbols) {
     const debugCtx = debugCanvas.getContext('2d');
     const scaleX = debugCanvas.width / canvas.width;
     const scaleY = debugCanvas.height / canvas.height;
-
     debugCtx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
     debugCtx.lineWidth = 2;
-
     for (const symbol of symbols) {
         if (!/^[A-Z]$/.test(symbol.text.trim().toUpperCase())) continue;
-        
         const { x0, y0, x1, y1 } = symbol.bbox;
         debugCtx.strokeRect(x0 * scaleX, y0 * scaleY, (x1 - x0) * scaleX, (y1 - y0) * scaleY);
     }
@@ -178,18 +184,12 @@ function highlightFinalWords(wordsData, letterMap) {
     const debugCtx = debugCanvas.getContext('2d');
     const scaleX = debugCanvas.width / canvas.width;
     const scaleY = debugCanvas.height / canvas.height;
-    
     debugCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
     debugCtx.lineWidth = 4;
-
     const lettersInWords = new Set();
-    // Use the detailed path data to highlight only the correct letters
     wordsData.forEach(wordData => {
-        wordData.path.forEach(coordKey => {
-            lettersInWords.add(coordKey);
-        });
+        wordData.path.forEach(coordKey => lettersInWords.add(coordKey));
     });
-
     lettersInWords.forEach(key => {
         const letter = letterMap.get(key);
         if (letter) {
@@ -200,26 +200,20 @@ function highlightFinalWords(wordsData, letterMap) {
 }
 
 function reconstructGrid(symbols) {
-    if (symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
-
+    if (!symbols || symbols.length === 0) return { grid: new Map(), letterMap: new Map() };
     const letters = symbols
         .map(s => ({ text: s.text.trim().toUpperCase(), bbox: s.bbox }))
         .filter(s => /^[A-Z]$/.test(s.text));
-    
     if (letters.length === 0) return { grid: new Map(), letterMap: new Map() };
-
     const widths = letters.map(s => s.bbox.x1 - s.bbox.x0).sort((a, b) => a - b);
     const heights = letters.map(s => s.bbox.y1 - s.bbox.y0).sort((a, b) => a - b);
     const medianWidth = widths[Math.floor(widths.length / 2)] || 20;
     const medianHeight = heights[Math.floor(heights.length / 2)] || 20;
-
-    const grid = new Map();
-    const letterMap = new Map();
+    const grid = new Map(), letterMap = new Map();
     for (const letter of letters) {
         const gridX = Math.round(letter.bbox.x0 / medianWidth);
         const gridY = Math.round(letter.bbox.y0 / medianHeight);
         const key = `${gridX},${gridY}`;
-        // Avoid overwriting a tile if two are too close; first one wins.
         if (!grid.has(key)) {
             grid.set(key, letter.text);
             letterMap.set(key, letter);
@@ -230,53 +224,39 @@ function reconstructGrid(symbols) {
 
 function extractWordsFromGrid(grid) {
     if (grid.size < 2) return [];
-
     const foundWordsData = [];
     const coords = Array.from(grid.keys()).map(k => k.split(',').map(Number));
     const [minX, maxX] = [Math.min(...coords.map(c => c[0])), Math.max(...coords.map(c => c[0]))];
     const [minY, maxY] = [Math.min(...coords.map(c => c[1])), Math.max(...coords.map(c => c[1]))];
-
     const isConnected = (x, y, isHorizontal) => isHorizontal
         ? grid.has(`${x},${y - 1}`) || grid.has(`${x},${y + 1}`)
         : grid.has(`${x - 1},${y}`) || grid.has(`${x + 1},${y}`);
-
-    // Horizontal Scan
     for (let y = minY; y <= maxY; y++) {
         let currentWord = '', path = [], wordIsConnected = false;
         for (let x = minX; x <= maxX + 1; x++) {
             const key = `${x},${y}`;
             if (grid.has(key)) {
-                currentWord += grid.get(key);
-                path.push(key);
+                currentWord += grid.get(key); path.push(key);
                 if (isConnected(x, y, true)) wordIsConnected = true;
             } else {
-                if (currentWord.length > 1 && wordIsConnected) {
-                    foundWordsData.push({ word: currentWord, path });
-                }
+                if (currentWord.length > 1 && wordIsConnected) foundWordsData.push({ word: currentWord, path });
                 currentWord = ''; path = []; wordIsConnected = false;
             }
         }
     }
-
-    // Vertical Scan
     for (let x = minX; x <= maxX; x++) {
         let currentWord = '', path = [], wordIsConnected = false;
         for (let y = minY; y <= maxY + 1; y++) {
             const key = `${x},${y}`;
             if (grid.has(key)) {
-                currentWord += grid.get(key);
-                path.push(key);
+                currentWord += grid.get(key); path.push(key);
                 if (isConnected(x, y, false)) wordIsConnected = true;
             } else {
-                if (currentWord.length > 1 && wordIsConnected) {
-                    foundWordsData.push({ word: currentWord, path });
-                }
+                if (currentWord.length > 1 && wordIsConnected) foundWordsData.push({ word: currentWord, path });
                 currentWord = ''; path = []; wordIsConnected = false;
             }
         }
     }
-    
-    // Handle the very first play (no connections yet)
     if (foundWordsData.length === 0) {
         const allWords = [];
         for (let y = minY; y <= maxY; y++) {
@@ -287,21 +267,8 @@ function extractWordsFromGrid(grid) {
                 else { if (currentWord.length > 1) allWords.push({ word: currentWord, path }); currentWord = ''; path = []; }
             }
         }
-        for (let x = minX; x <= maxX; x++) {
-            let currentWord = '', path = [];
-            for (let y = minY; y <= maxY + 1; y++) {
-                const key = `${x},${y}`;
-                if (grid.has(key)) { currentWord += grid.get(key); path.push(key); }
-                else { if (currentWord.length > 1) allWords.push({ word: currentWord, path }); currentWord = ''; path = []; }
-            }
-        }
-        // Only return if the grid consists of a single straight line of letters
-        if (allWords.length === 1 || (allWords.length === 2 && allWords[0].word === allWords[1].word)) {
-             return allWords.slice(0, 1);
-        }
+        if (allWords.length === 1) return allWords;
     }
-
-    // Remove duplicates
     const uniqueWords = new Map();
     foundWordsData.forEach(data => uniqueWords.set(data.word, data));
     return Array.from(uniqueWords.values());
@@ -310,13 +277,10 @@ function extractWordsFromGrid(grid) {
 function processWords(wordsData) {
     outputEl.innerHTML = '';
     let totalScore = 0;
-
     if (!wordsData || wordsData.length === 0) {
         totalScoreEl.textContent = "No valid words found";
-        resultsPanel.classList.add('visible');
-        return;
+        resultsPanel.classList.add('visible'); return;
     }
-
     const validWords = [];
     wordsData.forEach(data => {
         if (dictionary.has(data.word.toLowerCase())) {
@@ -325,22 +289,17 @@ function processWords(wordsData) {
             totalScore += score;
         }
     });
-
     if (validWords.length === 0) {
         totalScoreEl.textContent = "No valid words found";
-        resultsPanel.classList.add('visible');
-        return;
+        resultsPanel.classList.add('visible'); return;
     }
-
     validWords.sort((a, b) => a.word.localeCompare(b.word));
-
     validWords.forEach(({ word, score }) => {
         const wordDiv = document.createElement('div');
         wordDiv.classList.add('word-item', 'valid');
         wordDiv.textContent = `${word} - Score: ${score}`;
         outputEl.append(wordDiv);
     });
-
     totalScoreEl.textContent = `Total Score: ${totalScore}`;
     resultsPanel.classList.add('visible');
 }
