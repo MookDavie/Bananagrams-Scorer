@@ -9,7 +9,7 @@
 <body>
     <div id="camera-container">
         <video id="video" playsinline autoplay muted></video>
-        <!-- This new canvas will be used for the live debug view -->
+        <!-- This canvas provides the live visual feedback -->
         <canvas id="debug-canvas"></canvas>
         <div id="overlay">
             <p>Fit the entire grid in the frame and press Scan</p>
@@ -28,9 +28,13 @@
         <div id="output"></div>
     </div>
 
+    <!-- This hidden canvas is used for processing the image -->
     <canvas id="canvas" style="display:none;"></canvas>
 
+    <!-- Tesseract.js library for OCR -->
     <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    
+    <!-- Your main application script -->
     <script src="scorer.js"></script>
 </body>
 </html>
