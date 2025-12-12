@@ -17,19 +17,21 @@ body {
     height: 100vh;
     overflow: hidden;
     z-index: -1;
+    /* Use Flexbox for robust centering of the video element */
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
 #video {
-    min-width: 100vh;
-    min-height: 100vw;
+    /* Let Flexbox handle positioning; just define size */
+    min-width: 100vh; /* Use vh for width to account for rotation */
+    min-height: 100vw; /* Use vw for height to account for rotation */
     width: auto;
     height: auto;
+    /* The transform for rotation will be set by JavaScript */
 }
 
-/* --- NEW --- Style for the debug canvas overlay */
 #debug-canvas {
     position: absolute;
     top: 0;
@@ -39,7 +41,6 @@ body {
     z-index: 5; /* Above video, below controls */
     pointer-events: none; /* Allows clicks to pass through */
 }
-/* --- END NEW --- */
 
 #overlay {
     position: absolute;
@@ -52,7 +53,7 @@ body {
     justify-content: center;
     padding-top: 5vh;
     background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
-    pointer-events: none; /* Allows clicks to pass through */
+    pointer-events: none;
 }
 
 #overlay p {
