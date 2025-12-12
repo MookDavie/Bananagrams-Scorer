@@ -47,7 +47,24 @@ async function setupCamera() {
             video: { facingMode: 'environment' }
         });
         video.srcObject = stream;
-        await new Promise(resolve => video.onloadedmetadata = resolve);
+        
+        await new Promise(resolve => {
+            video.onloadedmetadata = () => {
+                video.play();
+
+                const isStreamLandscape = video.videoWidth > video.videoHeight;
+                
+                // --- THIS IS THE CORRECTED PART ---
+                // Flexbox is handling centering, so JS only needs to handle rotation.
+                if (isStreamLandscape) {
+                    video.style.transform = 'rotate(90deg)';
+                } else {
+                    video.style.transform = 'none';
+                }
+                // --- END OF CORRECTION ---
+                resolve();
+            };
+        });
     } catch (err) {
         console.error("Error accessing camera: ", err);
         alert('Could not access camera. Please grant permission and refresh.');
@@ -63,34 +80,30 @@ async function handleScan() {
     scanButton.disabled = true;
     scanButton.textContent = '...';
 
-    // Get the guide box's position relative to the viewport
     const guideRect = overlay.getBoundingClientRect();
-    
-    // Calculate the crop area based on the video's actual dimensions
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
-    const viewWidth = window.innerWidth;
-    const viewHeight = window.innerHeight;
-
-    // Find the scale factor between the video and the viewport
-    const scaleX = videoWidth / viewWidth;
-    const scaleY = videoHeight / viewHeight;
-
-    // Apply the scale to the guide box dimensions to get the crop coordinates
-    const cropX = guideRect.left * scaleX;
-    const cropY = guideRect.top * scaleY;
-    const cropWidth = guideRect.width * scaleX;
-    const cropHeight = guideRect.height * scaleY;
-
-    // Draw the full video frame to the canvas, then clear and draw only the cropped part
     const ctx = canvas.getContext('2d');
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
-    ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    canvas.width = guideRect.width;
+    canvas.height = guideRect.height;
 
-    // Perform OCR on the cropped canvas
+    // The most reliable way to crop is to draw the video to the canvas
+    // and let the browser handle the complex transformations.
+    // We draw the entire video, then crop from it.
+    
+    // Create a temporary canvas that's the size of the viewport
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = window.innerWidth;
+    tempCanvas.height = window.innerHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+
+    // Draw the video onto the temporary canvas. The browser will render it
+    // exactly as it appears on screen (centered and rotated by our CSS/JS).
+    tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+
+    // Now, crop the guide box area from this perfectly rendered temporary canvas.
+    ctx.drawImage(tempCanvas, guideRect.left, guideRect.top, guideRect.width, guideRect.height, 0, 0, canvas.width, canvas.height);
+
+    // Perform OCR on the final cropped canvas
     const { data: { text } } = await tesseractScheduler.addJob('recognize', canvas, {
-        // Tell Tesseract to treat the image as a single line of text. This is crucial!
         tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
     });
 
@@ -101,11 +114,9 @@ async function handleScan() {
 }
 
 function processRecognizedText(text) {
-    // Clean up the recognized text: uppercase, remove non-alphabetic chars, take the first "word"
     const word = text.trim().toUpperCase().replace(/[^A-Z]/g, '');
 
     if (word.length < 2 || scannedWords.has(word)) {
-        // Ignore short words, empty strings, or duplicates
         return;
     }
 
@@ -125,11 +136,9 @@ function processRecognizedText(text) {
         wordDiv.textContent = `${word} - (Invalid)`;
     }
 
-    // Add the new word to the top of the list
     outputEl.prepend(wordDiv);
     updateTotalScore();
     
-    // Show the results panel if it's not already visible
     if (!resultsPanel.classList.contains('visible')) {
         resultsPanel.classList.add('visible');
     }
